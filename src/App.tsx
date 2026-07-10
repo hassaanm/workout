@@ -1,17 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { exercises } from './data/exercises';
+import { exercisePhotoIds } from './data/exercisePhotos';
 import { blocks, workouts } from './data/program';
 import {
   addCalendarDays,
   classifySymptoms,
   exerciseSequence,
+  latestClearances,
   pauseActiveSession,
   pickupMondayAdjustment,
   resolvePlannedDay,
   restRemainingSeconds,
   restAfterExerciseStep,
   resumeActiveSession,
+  skipToNextSegment,
   summarizeWarmup,
   timerState,
   toLocalDate,
@@ -21,6 +24,7 @@ import type {
   ActiveSession,
   AppDataV1,
   CheckpointLog,
+  ClearanceRecord,
   ExerciseDefinition,
   SessionLog,
   SetLog,
@@ -237,7 +241,7 @@ export default function App() {
       {checkpointOpen && <CheckpointSheet data={data} date={selectedDate} onClose={() => setCheckpointOpen(false)} onSave={(checkpoint) => { commit((current) => ({ ...current, checkpoints: [...current.checkpoints, checkpoint] })); setCheckpointOpen(false); setToast('Checkpoint recorded.'); }} />}
       {discardDraftOpen && <DiscardDraftSheet onClose={() => setDiscardDraftOpen(false)} onDiscard={() => { updateActive(undefined); setDiscardDraftOpen(false); setToast('Unsaved workout discarded.'); }} />}
       {previewExercise && <ExerciseDetailSheet exercise={previewExercise.selected} data={data} onClose={() => setPreviewExercise(undefined)} onSwap={() => { setPreflightSwapFor(previewExercise); setPreviewExercise(undefined); }} />}
-      {preflightSwapFor && <SwapSheet planned={preflightSwapFor.planned} selected={preflightSwapFor.selected} onClose={() => setPreflightSwapFor(undefined)} onSelect={(selected) => { setPreflightSwaps((current) => ({ ...current, [preflightSwapFor.swapKey]: selected.id })); setPreflightSwapFor(undefined); }} />}
+      {preflightSwapFor && <SwapSheet planned={preflightSwapFor.planned} selected={preflightSwapFor.selected} clearances={data.clearances} onClose={() => setPreflightSwapFor(undefined)} onSelect={(selected) => { setPreflightSwaps((current) => ({ ...current, [preflightSwapFor.swapKey]: selected.id })); setPreflightSwapFor(undefined); }} />}
       {toast && <div className="toast" role="status">{toast}</div>}
     </>
   );
@@ -593,8 +597,9 @@ function WorkoutPlayer({ active, data, onChange, onToast, onLeave }: {
   onLeave: () => void;
 }) {
   const [now, setNow] = useState(Date.now());
-  const [logExercise, setLogExercise] = useState<{ planned: ExerciseDefinition; actual: ExerciseDefinition; segment: WorkoutSegment }>();
+  const [logExercise, setLogExercise] = useState<{ planned: ExerciseDefinition; actual: ExerciseDefinition; segment: WorkoutSegment; setIndex: number }>();
   const [swapFor, setSwapFor] = useState<{ planned: ExerciseDefinition; selected: ExerciseDefinition }>();
+  const [detailOpen, setDetailOpen] = useState(false);
   const [symptomOpen, setSymptomOpen] = useState(false);
   const [exitOpen, setExitOpen] = useState(false);
   const previousRest = useRef(0);
@@ -634,12 +639,13 @@ function WorkoutPlayer({ active, data, onChange, onToast, onLeave }: {
   }, [active, currentSegmentIndex, mainElapsed, onChange, workout.mainDurationSeconds]);
 
   useEffect(() => {
-    if (previousRest.current > 0 && restRemaining === 0 && data.profile.optionalAlerts) {
+    // Only alert when the rest timer ran out on its own; skipping rest clears restUntil.
+    if (previousRest.current > 0 && restRemaining === 0 && active.restUntil != null && data.profile.optionalAlerts) {
       navigator.vibrate?.(120);
       onToast('Rest complete. Next set is ready.');
     }
     previousRest.current = restRemaining;
-  }, [data.profile.optionalAlerts, onToast, restRemaining]);
+  }, [active.restUntil, data.profile.optionalAlerts, onToast, restRemaining]);
 
   if (active.phase === 'warmup') {
     const warmup = workout.warmup === 'prep_5' ? 'prep_5' : 'compressed_3';
@@ -715,7 +721,12 @@ function WorkoutPlayer({ active, data, onChange, onToast, onLeave }: {
           <p>{qualityStopped ? 'This power block is done. The next segment begins on schedule.' : segmentComplete ? 'Planned work is logged. Recover until the timer moves on.' : segmentState?.ended ? 'Rest safely, then move to the current segment.' : `Next: ${actualExercise.name}`}</p>
         </div>
         <div className="player-actions">
-          {!qualityStopped && !segmentComplete && <button className="primary-button" onClick={() => onChange({ ...active, restUntil: undefined })}>Ready early</button>}
+          {!qualityStopped && !segmentComplete && <button className="primary-button" onClick={() => onChange({ ...active, restUntil: undefined })}>Skip rest</button>}
+          {(qualityStopped || segmentComplete) && !segmentState?.ended && (
+            <button className="primary-button" onClick={() => onChange(skipToNextSegment(active, workout.segments))}>
+              {currentSegmentIndex >= workout.segments.length - 1 ? 'Finish main early' : 'Start next segment early'}
+            </button>
+          )}
           {segmentComplete && currentSequenceStep > 0 && <button className="secondary-button" onClick={() => onChange({ ...active, currentExerciseIndex: currentSequenceStep - 1, restUntil: undefined })}><Icon name="chevron-left" /> Previous exercise</button>}
         </div>
       </PlayerFrame>
@@ -728,9 +739,9 @@ function WorkoutPlayer({ active, data, onChange, onToast, onLeave }: {
       {active.warmup && active.warmup.status !== 'not_applicable' && <div className={`player-prep ${active.warmup.status}`}><strong>Prep {active.warmup.status}</strong><span>{active.warmup.completedSeconds ? `${formatClock(active.warmup.completedSeconds)} logged` : 'No credited warm-up'}</span></div>}
       <div className="player-segment">{segment.label} · {segment.mode === 'quality_limited' ? 'Quality limited' : `Segment ${currentSegmentIndex + 1}/${workout.segments.length}`}</div>
       <h1 className="player-exercise">{actualExercise.name}</h1>
-      <p className="player-target">{sequenceLabel} · {target} · {segment.notes[0] ?? 'Stop with clean form.'}</p>
+      <p className="player-target">{sequenceLabel} · {target} · {segment.notes[0] ?? 'Stop with clean form.'} <button className="inline-link" onClick={() => setDetailOpen(true)}>Technique & video ↗</button></p>
       <div className="segment-clock">{formatClock(segmentState?.segmentRemainingSeconds ?? 0)}</div>
-      <ExerciseVisual exercise={actualExercise} compact />
+      <ExercisePhotos exercise={actualExercise} onOpen={() => setDetailOpen(true)} />
       <div className="sequence-card"><div className="label">Next action</div><p>{nextAction}</p></div>
       <div className="cue-card"><div className="label">Main cue</div><p>{actualExercise.primaryCues.slice(0, 3).join(' · ')}</p></div>
       <div className="feel-row">
@@ -740,19 +751,25 @@ function WorkoutPlayer({ active, data, onChange, onToast, onLeave }: {
       <div className="last-performance">{previousSet ? `Last: ${previousSet.loadLb ? `${previousSet.loadLb} lb × ` : ''}${previousSet.reps ?? `${previousSet.durationSeconds ?? 0}s`} · ${formatDate(previous!.date, { month: 'short', day: 'numeric' })}` : 'No prior performance — choose a conservative start.'}</div>
       <div className="player-spacer" />
       <div className="player-actions">
-        <button className="primary-button" disabled={!segmentState?.canStartSet} onClick={() => setLogExercise({ planned: plannedExercise, actual: actualExercise, segment })}>{segmentState?.canStartSet ? <><Icon name="check" /> {segment.mode === 'quality_limited' ? 'Rep complete' : 'Set complete'}</> : 'Segment boundary · move on'}</button>
+        <button className="primary-button" disabled={!segmentState?.canStartSet} onClick={() => setLogExercise({ planned: plannedExercise, actual: actualExercise, segment, setIndex: active.sets.filter((item) => item.segmentId === segment.id && item.actualExerciseId === actualExercise.id).length })}>{segmentState?.canStartSet ? <><Icon name="check" /> {segment.mode === 'quality_limited' ? 'Rep complete' : 'Set complete'}</> : 'Segment boundary · move on'}</button>
         <button className="secondary-button" disabled={currentSequenceStep === 0} onClick={() => onChange({ ...active, currentExerciseIndex: currentSequenceStep - 1, restUntil: undefined })}><Icon name="chevron-left" /> Previous</button>
         <button className="secondary-button" onClick={() => setSwapFor({ planned: plannedExercise, selected: actualExercise })}><Icon name="swap" /> Swap</button>
         <button className="secondary-button" title="Regress or stop for pain, swelling, instability, or neurological symptoms" onClick={() => setSymptomOpen(true)}><Icon name="alert" /> Pain / symptoms</button>
         {segment.mode === 'quality_limited' && <button className="secondary-button" onClick={() => onChange({ ...active, qualityStoppedSegmentIds: [...(active.qualityStoppedSegmentIds ?? []), segment.id] })}>Quality dropped</button>}
       </div>
 
-      {logExercise && <SetLogSheet exercise={logExercise.actual} planned={logExercise.planned} segment={logExercise.segment} previous={previousSet} setIndex={active.sets.filter((item) => item.segmentId === segment.id && item.actualExerciseId === actualExercise.id).length} onClose={() => setLogExercise(undefined)} onSave={(set) => {
-        const rest = restAfterThisSet ? restSeconds ?? 0 : 0;
-        onChange({ ...active, sets: [...active.sets, set], currentExerciseIndex: currentSequenceStep + 1, restUntil: rest ? new Date(Date.now() + rest * 1000).toISOString() : undefined });
+      {logExercise && <SetLogSheet exercise={logExercise.actual} planned={logExercise.planned} segment={logExercise.segment} previous={previousSet} setIndex={logExercise.setIndex} onClose={() => setLogExercise(undefined)} onSave={(set) => {
+        if (logExercise.segment.id === segment.id) {
+          const rest = restAfterThisSet ? restSeconds ?? 0 : 0;
+          onChange({ ...active, sets: [...active.sets, set], currentExerciseIndex: currentSequenceStep + 1, restUntil: rest ? new Date(Date.now() + rest * 1000).toISOString() : undefined });
+        } else {
+          // The clock crossed into the next segment while the sheet was open; log the set without touching the new segment's cursor.
+          onChange({ ...active, sets: [...active.sets, set] });
+        }
         setLogExercise(undefined);
       }} />}
-      {swapFor && <SwapSheet planned={swapFor.planned} selected={swapFor.selected} onClose={() => setSwapFor(undefined)} onSelect={(selected) => { onChange({ ...active, exerciseSwaps: { ...(active.exerciseSwaps ?? {}), [swapKey]: selected.id } }); setSwapFor(undefined); }} />}
+      {swapFor && <SwapSheet planned={swapFor.planned} selected={swapFor.selected} clearances={data.clearances} onClose={() => setSwapFor(undefined)} onSelect={(selected) => { onChange({ ...active, exerciseSwaps: { ...(active.exerciseSwaps ?? {}), [swapKey]: selected.id } }); setSwapFor(undefined); }} />}
+      {detailOpen && <ExerciseDetailSheet exercise={actualExercise} data={data} onClose={() => setDetailOpen(false)} onSwap={() => { setDetailOpen(false); setSwapFor({ planned: plannedExercise, selected: actualExercise }); }} />}
       {symptomOpen && <SymptomSheet onClose={() => setSymptomOpen(false)} onRegress={() => { setSymptomOpen(false); setSwapFor({ planned: plannedExercise, selected: actualExercise }); }} onStop={() => { setSymptomOpen(false); onChange({ ...active, phase: 'checkout', phaseStartedAt: new Date().toISOString() }); }} />}
     </PlayerFrame>
   );
@@ -845,51 +862,19 @@ function NumberInput({ label, value, step, min, onChange }: { label: string; val
   );
 }
 
-type MovementMap = 'lower' | 'jump' | 'push' | 'pull' | 'brace' | 'speed' | 'foot' | 'balance';
-
-function movementMapFor(exercise: ExerciseDefinition): MovementMap {
-  if (['plyometric', 'landing', 'dunk skill'].includes(exercise.category)) return 'jump';
-  if (exercise.category === 'upper push') return 'push';
-  if (exercise.category === 'upper pull') return 'pull';
-  if (['trunk', 'hip strength', 'posterior chain'].includes(exercise.category)) return 'brace';
-  if (['speed', 'conditioning', 'warmup'].includes(exercise.category)) return 'speed';
-  if (['lower leg', 'ankle resilience'].includes(exercise.category)) return 'foot';
-  if (['balance', 'rehab', 'mobility', 'recovery'].includes(exercise.category)) return 'balance';
-  return 'lower';
-}
-
-function ExerciseVisual({ exercise, compact = false }: { exercise: ExerciseDefinition; compact?: boolean }) {
-  const map = movementMapFor(exercise);
-  const copy: Record<MovementMap, [string, string]> = {
-    lower: ['Lower-body force', 'Own the foot, knee, and hip position through the whole rep.'],
-    jump: ['Explode, then own the landing', 'Fast intent up; quiet, stable control down.'],
-    push: ['Press from a stacked position', 'Keep the ribcage and shoulder position controlled as you press.'],
-    pull: ['Pull with a quiet trunk', 'Keep the torso set while the shoulder blade and arm do the work.'],
-    brace: ['Brace before you move', 'Move from the hips or shoulders without losing a comfortable trunk position.'],
-    speed: ['Move forward with control', 'Stay smooth and crisp rather than chasing fatigue.'],
-    foot: ['Build from the foot up', 'Keep the heel, arch, and toes working together.'],
-    balance: ['Own the position', 'Use a small, controlled range before adding speed or complexity.'],
-  };
-  const [label, description] = copy[map];
-  const person = <g className="movement-person"><circle cx="60" cy="24" r="9" /><path d="M60 34v34M60 45 38 58M60 45l22 13M60 68 43 98M60 68l20 30" /></g>;
-
-  return (
-    <figure className={`exercise-visual map-${map} ${compact ? 'compact' : ''}`}>
-      {!compact && <div className="exercise-visual-label"><span>Movement map</span><strong>{label}</strong></div>}
-      <svg viewBox="0 0 160 118" role="img" aria-label={`${exercise.name}: ${label}`}>
-        {person}
-        {map === 'lower' && <><path className="movement-guide" d="M93 90h38M107 79v23" /><path className="movement-arrow" d="M108 30v34" /></>}
-        {map === 'jump' && <><path className="movement-arrow" d="M103 78V25" /><path className="movement-guide" d="M48 101h65" /><path className="movement-guide" d="M115 86c8 5 13 10 16 16" /></>}
-        {map === 'push' && <><path className="movement-arrow" d="M87 57h43" /><path className="movement-guide" d="M111 42v30" /></>}
-        {map === 'pull' && <><path className="movement-arrow" d="M132 57H89" /><path className="movement-guide" d="M113 31v54" /></>}
-        {map === 'brace' && <><ellipse className="movement-core" cx="60" cy="53" rx="18" ry="24" /><path className="movement-arrow" d="M110 76c-13 0-22-9-22-22" /></>}
-        {map === 'speed' && <><path className="movement-arrow" d="M91 77h42" /><path className="movement-guide" d="M100 38h26M107 52h34M99 66h25" /></>}
-        {map === 'foot' && <><path className="movement-foot" d="M95 83c14 0 25 4 34 14H89c-5-7-2-14 6-14Z" /><path className="movement-arrow" d="M109 74V48" /></>}
-        {map === 'balance' && <><path className="movement-guide" d="M60 102h47" /><path className="movement-arrow" d="M108 46c8 9 8 20 0 29" /></>}
-      </svg>
-      {!compact && <figcaption>{description}</figcaption>}
-    </figure>
+function ExercisePhotos({ exercise, onOpen }: { exercise: ExerciseDefinition; onOpen?: () => void }) {
+  if (!exercisePhotoIds.has(exercise.id)) return null;
+  const base = `${import.meta.env.BASE_URL}exercise-photos/${exercise.id}`;
+  const photos = (
+    <>
+      <img src={`${base}-0.jpg`} alt={`${exercise.name}: start position`} loading="lazy" />
+      <img src={`${base}-1.jpg`} alt={`${exercise.name}: finish position`} loading="lazy" />
+    </>
   );
+  if (onOpen) {
+    return <button className="exercise-photos" onClick={onOpen} aria-label={`Open ${exercise.name} technique card`}>{photos}</button>;
+  }
+  return <figure className="exercise-photos">{photos}</figure>;
 }
 
 function ExerciseDetailSheet({ exercise, data, onClose, onSwap }: { exercise: ExerciseDefinition; data: AppDataV1; onClose: () => void; onSwap?: () => void }) {
@@ -904,7 +889,7 @@ function ExerciseDetailSheet({ exercise, data, onClose, onSwap }: { exercise: Ex
       <div className="eyebrow">{exercise.category} · technique card</div>
       <h2>{exercise.name}</h2>
       <p className="sheet-copy">{exercise.purpose}</p>
-      <ExerciseVisual exercise={exercise} />
+      <ExercisePhotos exercise={exercise} />
       <a className="primary-button wide top-space" href={demo} target="_blank" rel="noreferrer">{exercise.demoUrl ? 'Watch technique demo ↗' : 'Find video demo ↗'}</a>
       {onSwap && <button className="secondary-button wide top-space" onClick={onSwap}><Icon name="swap" /> Swap for today</button>}
       <details className="technique" open><summary>Setup and execution</summary><ul className="detail-list">{[...exercise.setup, ...exercise.execution].map((item) => <li key={item}>{item}</li>)}</ul></details>
@@ -921,23 +906,33 @@ function ExerciseDetailSheet({ exercise, data, onClose, onSwap }: { exercise: Ex
   );
 }
 
-function SwapSheet({ planned, selected, onClose, onSelect }: { planned: ExerciseDefinition; selected: ExerciseDefinition; onClose: () => void; onSelect: (exercise: ExerciseDefinition) => void }) {
+function SwapSheet({ planned, selected, clearances, onClose, onSelect }: { planned: ExerciseDefinition; selected: ExerciseDefinition; clearances: ClearanceRecord[]; onClose: () => void; onSelect: (exercise: ExerciseDefinition) => void }) {
+  const latest = latestClearances(clearances, toLocalDate());
+  const isCleared = (exercise: ExerciseDefinition) => exercise.clearanceRequired.every((key) => {
+    const status = latest.get(key)?.status;
+    return status === 'cleared' || status === 'cleared_with_limits';
+  });
   const alternatives = [
     { id: planned.id, label: 'Original plan' },
     ...planned.bodyweightAlternativeIds.map((id) => ({ id, label: 'No equipment' })),
     ...planned.regressionIds.map((id) => ({ id, label: 'Regression' })),
     ...planned.progressionIds.map((id) => ({ id, label: 'Progression' })),
-  ].reduce<{ id: string; label: string }[]>((items, option) => items.some((item) => item.id === option.id) ? items : [...items, option], []);
+  ]
+    .reduce<{ id: string; label: string }[]>((items, option) => items.some((item) => item.id === option.id) ? items : [...items, option], [])
+    .filter((option) => option.label !== 'Progression' || isCleared(exerciseFor(option.id)));
   return (
     <Sheet onClose={onClose}>
       <div className="eyebrow">Swap for today</div>
       <h2>Choose today’s version.</h2>
       <p className="sheet-copy">All configured alternatives are here. Your performed version is tracked separately from the plan.</p>
-      <div className="top-space">
+      <div className="swap-options top-space">
         {alternatives.map((option) => {
           const item = exerciseFor(option.id);
-          return <button className={`card wide row ${selected.id === item.id ? 'selected-swap' : ''}`} key={item.id} onClick={() => onSelect(item)}>
-            <span className="row-main"><span className="row-title">{item.name}</span><span className="row-copy">{option.label} · {item.equipment.length ? item.equipment.join(' · ') : 'No equipment'}</span></span>{selected.id === item.id ? <span className="swap-current">Current</span> : <Icon name="chevron-right" />}
+          const equipment = item.equipment.length ? item.equipment.join(' · ') : 'No equipment';
+          return <button className={`swap-option ${selected.id === item.id ? 'selected-swap' : ''}`} key={item.id} onClick={() => onSelect(item)}>
+            <span className="swap-option-name">{item.name}</span>
+            {selected.id === item.id && <span className="swap-current">Current</span>}
+            <span className="swap-option-meta">{option.label === equipment ? option.label : `${option.label} · ${equipment}`}</span>
           </button>
         })}
       </div>
@@ -1009,6 +1004,11 @@ function DiscardDraftSheet({ onClose, onDiscard }: { onClose: () => void; onDisc
 }
 
 function Sheet({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
   return createPortal(
     <div className="sheet-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="sheet" role="dialog" aria-modal="true">

@@ -294,6 +294,26 @@ export function pauseActiveSession(session: ActiveSession, now: string | number 
   return { ...session, pausedAt: new Date(timestamp(now)).toISOString() };
 }
 
+export function skipToNextSegment(
+  session: ActiveSession,
+  segments: Pick<WorkoutSegment, 'startSecond' | 'endSecond'>[],
+  now: string | number | Date = new Date(),
+): ActiveSession {
+  if (!session.mainStartedAt) return session;
+  const elapsed = Math.max(0, (timestamp(now) - timestamp(session.mainStartedAt)) / 1000);
+  const current = segments.find((segment) => elapsed < segment.endSecond);
+  if (!current) return session;
+  // Shift the main clock back so elapsed time lands exactly on the segment boundary;
+  // the player derives the segment from the clock, so this also ends the main block
+  // when the current segment is the last one.
+  const shiftMs = Math.round((current.endSecond - elapsed) * 1000);
+  return {
+    ...session,
+    mainStartedAt: new Date(timestamp(session.mainStartedAt) - shiftMs).toISOString(),
+    restUntil: undefined,
+  };
+}
+
 export function resumeActiveSession(session: ActiveSession, now: string | number | Date = new Date()): ActiveSession {
   if (!session.pausedAt) return session;
   const pausedForMs = Math.max(0, timestamp(now) - timestamp(session.pausedAt));

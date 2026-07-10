@@ -86,7 +86,7 @@ function EquipmentChips({ selected, onToggle }: { selected: string[]; onToggle: 
 
 export function OnboardingScreen({ data, onComplete }: { data: AppDataV1; onComplete: (data: AppDataV1) => void }) {
   const [profile, setProfile] = useState(data.profile);
-  const [currentWeight, setCurrentWeight] = useState('185');
+  const [currentWeight, setCurrentWeight] = useState('');
   const [persistence, setPersistence] = useState<'idle' | 'granted' | 'unavailable'>('idle');
 
   const change = <K extends keyof ProfileSettings>(key: K, value: ProfileSettings[K]) =>
@@ -140,7 +140,7 @@ export function OnboardingScreen({ data, onComplete }: { data: AppDataV1; onComp
           </div>
           <div className="field">
             <label htmlFor="onboarding-weight">Current weight in pounds (optional)</label>
-            <input id="onboarding-weight" type="number" min="40" max="1000" step="0.1" inputMode="decimal" value={currentWeight} onChange={(event) => setCurrentWeight(event.target.value)} />
+            <input id="onboarding-weight" type="number" min="40" max="1000" step="0.1" inputMode="decimal" placeholder="185" value={currentWeight} onChange={(event) => setCurrentWeight(event.target.value)} />
           </div>
           <div className="field">
             <label>Equipment available</label>
@@ -318,10 +318,48 @@ type SettingsProps = {
 };
 
 function latestClearanceRows(records: ClearanceRecord[]) {
+  const today = toLocalDate();
   return CLEARANCES.map(([key, label]) => {
-    const record = [...records].reverse().filter((item) => item.key === key).sort((a, b) => b.date.localeCompare(a.date)).at(0);
+    const record = [...records].reverse().filter((item) => item.key === key && item.date <= today).sort((a, b) => b.date.localeCompare(a.date)).at(0);
     return { key, label, record };
   });
+}
+
+function NumberSettingRow({ id, label, value, min, max, step = 1, onCommit }: {
+  id: string;
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  onCommit: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState(String(value));
+  return (
+    <div className="settings-row">
+      <label htmlFor={id}>{label}</label>
+      <input
+        id={id}
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        inputMode="decimal"
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={() => {
+          const next = Number(draft);
+          if (draft !== '' && Number.isFinite(next)) {
+            const clamped = Math.min(max, Math.max(min, next));
+            setDraft(String(clamped));
+            onCommit(clamped);
+          } else {
+            setDraft(String(value));
+          }
+        }}
+      />
+    </div>
+  );
 }
 
 export function SettingsScreen({ data, onChange, onToast, onStartPractice }: SettingsProps) {
@@ -400,9 +438,9 @@ export function SettingsScreen({ data, onChange, onToast, onStartPractice }: Set
           <div className="settings-row"><label htmlFor="settings-name">Name</label><input id="settings-name" value={data.profile.name} placeholder="Optional" onChange={(event) => changeProfile('name', event.target.value)} /></div>
           <div className="settings-row"><label htmlFor="settings-theme">Theme</label><select id="settings-theme" value={data.profile.theme} onChange={(event) => changeProfile('theme', event.target.value as ProfileSettings['theme'])}><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
           <div className="settings-row"><label htmlFor="settings-start">Start date</label><input id="settings-start" type="date" value={data.profile.programStartDate} onChange={(event) => { const value = event.target.value; if (value && (!data.sessions.length || window.confirm('Changing the start date remaps future calendar workouts. Keep existing logs on their original dates?'))) changeProfile('programStartDate', value); }} /></div>
-          <div className="settings-row"><label htmlFor="settings-reach">Standing reach (in)</label><input id="settings-reach" type="number" min="30" max="120" value={data.profile.standingReachInches} onChange={(event) => { if (event.target.value) changeProfile('standingReachInches', Number(event.target.value)); }} /></div>
-          <div className="settings-row"><label htmlFor="settings-upper-increment">Upper-body increment</label><input id="settings-upper-increment" type="number" min="0.1" max="100" step="0.5" value={data.profile.upperBodyIncrementLb} onChange={(event) => { if (event.target.value) changeProfile('upperBodyIncrementLb', Number(event.target.value)); }} /></div>
-          <div className="settings-row"><label htmlFor="settings-lower-increment">Lower-body increment</label><input id="settings-lower-increment" type="number" min="0.1" max="100" step="0.5" value={data.profile.lowerBodyIncrementLb} onChange={(event) => { if (event.target.value) changeProfile('lowerBodyIncrementLb', Number(event.target.value)); }} /></div>
+          <NumberSettingRow id="settings-reach" label="Standing reach (in)" value={data.profile.standingReachInches} min={30} max={120} onCommit={(value) => changeProfile('standingReachInches', value)} />
+          <NumberSettingRow id="settings-upper-increment" label="Upper-body increment" value={data.profile.upperBodyIncrementLb} min={0.1} max={100} step={0.5} onCommit={(value) => changeProfile('upperBodyIncrementLb', value)} />
+          <NumberSettingRow id="settings-lower-increment" label="Lower-body increment" value={data.profile.lowerBodyIncrementLb} min={0.1} max={100} step={0.5} onCommit={(value) => changeProfile('lowerBodyIncrementLb', value)} />
           <div className="settings-row"><label htmlFor="settings-weight-prompt">Daily weight prompt</label><input id="settings-weight-prompt" type="checkbox" checked={data.profile.bodyWeightPrompt} onChange={(event) => changeProfile('bodyWeightPrompt', event.target.checked)} /></div>
           <div className="settings-row"><label htmlFor="settings-alerts">Timer alerts</label><input id="settings-alerts" type="checkbox" checked={data.profile.optionalAlerts} onChange={(event) => changeProfile('optionalAlerts', event.target.checked)} /></div>
         </div>

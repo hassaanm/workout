@@ -227,7 +227,7 @@ export const workouts: WorkoutTemplate[] = [
   workout({
     id: 'lower_strength_b', name: 'Lower Strength B — Single-Leg & Posterior Chain', shortName: 'Lower B',
     purpose: 'Build unilateral control, hip strength, deceleration capacity, and lower-leg resilience.',
-    warmup: 'prep_5', cooldown: 'cooldown_3', stressTags: ['lower', 'strength'], clearanceRequired: ['squat_loading', 'heavy_hamstring'], nonImpactWorkoutId: 'lower_strength_b_pt',
+    warmup: 'prep_5', cooldown: 'cooldown_3', stressTags: ['lower', 'strength'], clearanceRequired: ['squat_loading', 'deep_flexion', 'heavy_hamstring'], nonImpactWorkoutId: 'lower_strength_b_pt',
     segments: [
       segment('lower_b_squat', 'Squat / split squat', 0, 480, 'time_boxed_move_on', 'single', [{ exerciseId: 'front_squat', targetSets: 4, repRange: [5, 8] }], { restSeconds: 90, notes: ['Use heel-elevated squat or split squat when that fits the approved range better.'] }),
       segment('lower_b_hinge', 'Hinge / hip extension', 480, 900, 'time_boxed_move_on', 'single', [{ exerciseId: 'romanian_deadlift', targetSets: 3, repRange: [6, 10] }], { restSeconds: 90 }),
@@ -253,7 +253,7 @@ export const workouts: WorkoutTemplate[] = [
   workout({
     id: 'lower_strength_b_max', name: 'Lower Strength B — Heavy', shortName: 'Lower B · Heavy',
     purpose: 'Build heavy squat and hinge strength while maintaining control.',
-    warmup: 'prep_5', cooldown: 'cooldown_3', stressTags: ['lower', 'max-strength'], clearanceRequired: ['squat_loading', 'heavy_hamstring'], nonImpactWorkoutId: 'lower_strength_b_pt',
+    warmup: 'prep_5', cooldown: 'cooldown_3', stressTags: ['lower', 'max-strength'], clearanceRequired: ['squat_loading', 'deep_flexion', 'heavy_hamstring'], nonImpactWorkoutId: 'lower_strength_b_pt',
     segments: [
       segment('lower_b_max_squat', 'Heavy squat', 0, 540, 'time_boxed_move_on', 'single', [{ exerciseId: 'front_squat', targetSets: 4, repRange: [3, 6] }], { restSeconds: 120 }),
       segment('lower_b_max_hinge', 'Hinge', 540, 960, 'time_boxed_move_on', 'single', [{ exerciseId: 'romanian_deadlift', targetSets: 3, repRange: [5, 8] }], { restSeconds: 90 }),

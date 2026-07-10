@@ -12,6 +12,7 @@ import {
   restAfterExerciseStep,
   resumeActiveSession,
   rollingBodyWeightAverage,
+  skipToNextSegment,
   suggestDoubleProgression,
   summarizeWarmup,
   timerState,
@@ -65,6 +66,16 @@ describe('safety resolution', () => {
     expect(classifySymptoms({ ...greenCheck, swelling: true })).toBe('red');
     expect(classifySymptoms({ ...greenCheck, neurologicalSymptoms: true })).toBe('red');
     expect(classifySymptoms({ ...greenCheck, braceUsed: 'no' }, true)).toBe('red');
+  });
+
+  it('ignores clearance records dated after the day being resolved', () => {
+    const future: ClearanceRecord[] = [
+      { id: '1', key: 'squat_loading', status: 'cleared', date: '2026-09-01', source: 'pt' },
+      { id: '2', key: 'heavy_hamstring', status: 'cleared', date: '2026-09-01', source: 'pt' },
+      { id: '3', key: 'deep_flexion', status: 'cleared', date: '2026-09-01', source: 'pt' },
+    ];
+    expect(applyClearanceSubstitution('lower_strength_b', future, '2026-08-31').workoutId).toBe('lower_strength_b_pt');
+    expect(applyClearanceSubstitution('lower_strength_b', future, '2026-09-01').workoutId).toBe('lower_strength_b');
   });
 
   it('uses a safe fallback until every required clearance is present', () => {
@@ -187,5 +198,39 @@ describe('warm-up and draft recovery', () => {
     expect(resumed.mainStartedAt).toBe('2026-07-10T12:10:00.000Z');
     expect(resumed.restUntil).toBe('2026-07-10T12:15:00.000Z');
     expect(timerState(resumed.mainStartedAt!, '2026-07-10T12:12:00.000Z', { startSecond: 0, endSecond: 480 }).overallElapsedSeconds).toBe(120);
+  });
+
+  it('skips ahead to the next segment boundary by shifting the main clock', () => {
+    const segments = [
+      { startSecond: 0, endSecond: 480 },
+      { startSecond: 480, endSecond: 900 },
+      { startSecond: 900, endSecond: 1200 },
+    ];
+    const active = {
+      id: 'draft',
+      date: '2026-07-10',
+      plannedWorkoutId: 'upper_strength_a',
+      actualWorkoutId: 'upper_strength_a',
+      practice: false,
+      phase: 'main',
+      phaseStartedAt: '2026-07-10T12:00:00.000Z',
+      mainStartedAt: '2026-07-10T12:00:00.000Z',
+      restUntil: '2026-07-10T12:06:00.000Z',
+      currentSegmentIndex: 0,
+      currentExerciseIndex: 3,
+      sets: [],
+      preCheck: greenCheck,
+    } as ActiveSession;
+
+    const now = '2026-07-10T12:05:00.000Z';
+    const skipped = skipToNextSegment(active, segments, now);
+    expect(skipped.restUntil).toBeUndefined();
+    expect(timerState(skipped.mainStartedAt!, now, segments[1]).overallElapsedSeconds).toBe(480);
+
+    const lastSegmentNow = '2026-07-10T12:16:40.000Z';
+    const finished = skipToNextSegment(active, segments, lastSegmentNow);
+    expect(timerState(finished.mainStartedAt!, lastSegmentNow, segments[2])).toMatchObject({ overallRemainingSeconds: 0, ended: true });
+
+    expect(skipToNextSegment({ ...active, mainStartedAt: undefined }, segments, now)).toEqual({ ...active, mainStartedAt: undefined });
   });
 });

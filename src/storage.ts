@@ -1,3 +1,4 @@
+import { toLocalDate } from './domain';
 import type {
   ActiveSession,
   AppDataV1,
@@ -47,11 +48,12 @@ const DEFAULT_EQUIPMENT = [
 ];
 
 export function defaultData(): AppDataV1 {
+  const today = toLocalDate();
   const clearances: ClearanceRecord[] = CLEARANCE_KEYS.map((key) => ({
     id: `initial-${key}`,
     key,
     status: key === 'brace_required' || key === 'squat_loading' ? 'cleared_with_limits' : 'not_cleared',
-    date: '2026-07-10',
+    date: today,
     limits:
       key === 'brace_required'
         ? 'Use the prescribed brace for strenuous activity or exercise.'
@@ -65,7 +67,7 @@ export function defaultData(): AppDataV1 {
     schemaVersion: 1,
     profile: {
       name: '',
-      programStartDate: '2026-07-10',
+      programStartDate: today,
       standingReachInches: 91,
       targetWeightRangeLb: [160, 165],
       theme: 'system',
@@ -133,7 +135,8 @@ export function downloadBackup(data: AppDataV1): void {
   link.href = url;
   link.download = `dunk-project-backup-${new Date().toISOString().slice(0, 10)}.json`;
   link.click();
-  URL.revokeObjectURL(url);
+  // Immediate revoke can abort the download on iOS Safari; defer it.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export interface ImportPreview {
@@ -359,6 +362,13 @@ function validateActiveSession(value: unknown, path: string): asserts value is A
   number(item.currentSegmentIndex, `${path}.currentSegmentIndex`, 0, 1000);
   number(item.currentExerciseIndex, `${path}.currentExerciseIndex`, 0, 1000);
   optionalTimestamp(item.restUntil, `${path}.restUntil`);
+  optionalNumber(item.bodyWeightLb, `${path}.bodyWeightLb`, 40, 1000);
+  if (item.exerciseSwaps !== undefined) {
+    Object.entries(record(item.exerciseSwaps, `${path}.exerciseSwaps`)).forEach(([key, value]) =>
+      string(value, `${path}.exerciseSwaps[${key}]`),
+    );
+  }
+  if (item.qualityStoppedSegmentIds !== undefined) stringArray(item.qualityStoppedSegmentIds, `${path}.qualityStoppedSegmentIds`);
   array(item.sets, `${path}.sets`).forEach((set, index) => validateSet(set, `${path}.sets[${index}]`));
   validateSymptoms(item.preCheck, `${path}.preCheck`);
 }
