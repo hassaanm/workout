@@ -70,6 +70,7 @@
 
   html, body, #root { min-height: 100%; }
   html { background: var(--paper); }
+  body:has(.sheet-backdrop) #root { visibility: hidden; }
   body {
     min-width: 320px;
     min-height: 100dvh;
@@ -243,6 +244,14 @@
   .segment-time { color: var(--ink-soft); font-variant-numeric: tabular-nums; font-size: .72rem; font-weight: 750; }
   .segment-name { font-size: .86rem; font-weight: 700; }
   .segment-target { color: var(--ink-soft); font-size: .72rem; }
+  .preview-exercises { display: grid; gap: 5px; margin-top: 6px; }
+  .preview-exercise { display: flex; width: 100%; align-items: center; gap: 7px; padding: 4px 0; color: var(--ink); background: transparent; text-align: left; }
+  .preview-exercise span { min-width: 0; flex: 1; }
+  .preview-exercise strong, .preview-exercise small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .preview-exercise strong { font-size: .76rem; }
+  .preview-exercise small { margin-top: 1px; color: var(--ink-soft); font-size: .68rem; }
+  .preview-exercise em { color: var(--blue); font-size: .62rem; font-style: normal; font-weight: 800; text-transform: uppercase; }
+  .preview-exercise svg { width: 14px; height: 14px; color: var(--ink-soft); }
 
   .bottom-nav {
     position: fixed;
@@ -346,6 +355,25 @@
   .feel-card strong { display: block; color: rgb(244 240 230 / 43%); font-size: .59rem; letter-spacing: .1em; text-transform: uppercase; }
   .feel-card span { display: block; margin-top: 5px; font-size: .75rem; line-height: 1.32; }
   .last-performance { margin-top: 10px; color: rgb(244 240 230 / 50%); font-size: .72rem; }
+  .sequence-card { margin-top: 10px; padding: 11px 13px; border-left: 2px solid var(--coral); border-radius: 0 12px 12px 0; background: rgb(244 240 230 / 5%); }
+  .sequence-card p { margin-top: 4px; color: rgb(244 240 230 / 72%); font-size: .78rem; line-height: 1.35; }
+  .exercise-visual { margin: 17px 0 0; padding: 15px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--blue) 34%, var(--line)); border-radius: 18px; color: #f4f0e6; background: radial-gradient(circle at 90% 12%, rgb(111 140 242 / 26%), transparent 38%), #151814; }
+  .exercise-visual-label { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; }
+  .exercise-visual-label span { color: rgb(244 240 230 / 54%); font-size: .6rem; font-weight: 800; letter-spacing: .11em; text-transform: uppercase; }
+  .exercise-visual-label strong { font-size: .8rem; }
+  .exercise-visual svg { width: 100%; height: 122px; margin-top: 5px; }
+  .movement-person, .movement-guide, .movement-arrow, .movement-core, .movement-foot { fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; }
+  .movement-person { stroke-width: 5; }
+  .movement-guide { stroke: rgb(244 240 230 / 32%); stroke-width: 3; stroke-dasharray: 4 7; }
+  .movement-arrow { stroke: var(--coral); stroke-width: 4; stroke-dasharray: 8 7; }
+  .movement-core { fill: rgb(111 140 242 / 24%); stroke: var(--blue); stroke-width: 2; }
+  .movement-foot { fill: rgb(244 240 230 / 13%); stroke-width: 3; }
+  .exercise-visual figcaption { color: rgb(244 240 230 / 68%); font-size: .75rem; line-height: 1.35; }
+  .exercise-visual.compact { margin-top: 10px; padding: 5px 12px; border-radius: 14px; }
+  .exercise-visual.compact svg { height: 72px; margin: 0; }
+  .selected-swap { border-color: color-mix(in srgb, var(--blue) 60%, var(--line)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 17%, transparent); }
+  .swap-current { color: var(--blue); font-size: .72rem; font-weight: 800; }
+  @media (prefers-reduced-motion: no-preference) { .movement-arrow { animation: movement-dash 1.7s linear infinite; } }
   .player-spacer { flex: 1; min-height: 18px; }
   .player-actions { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
   .player-actions .primary-button { grid-column: 1 / -1; min-height: 59px; color: #171915; background: #f4f0e6; box-shadow: none; }
@@ -420,6 +448,7 @@
 
   @keyframes sheet-up { from { opacity: 0; transform: translateY(24px); } }
   @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
+  @keyframes movement-dash { to { stroke-dashoffset: -30; } }
 
   @media (min-width: 700px) {
     .app-shell, .screen-content, .player-content { padding-inline: 28px; }

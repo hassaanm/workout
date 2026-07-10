@@ -4,17 +4,19 @@ import {
   applyClearanceSubstitution,
   classifySymptoms,
   differenceInCalendarDays,
+  exerciseSequence,
   pickupMondayAdjustment,
   pauseActiveSession,
   resolvePlannedDay,
   restRemainingSeconds,
+  restAfterExerciseStep,
   resumeActiveSession,
   rollingBodyWeightAverage,
   suggestDoubleProgression,
   summarizeWarmup,
   timerState,
 } from './domain';
-import type { ActiveSession, ClearanceRecord, SessionLog, SymptomCheck } from './types';
+import type { ActiveSession, ClearanceRecord, SessionLog, SymptomCheck, WorkoutSegment } from './types';
 
 const greenCheck: SymptomCheck = {
   kneePain0to10: 0,
@@ -139,6 +141,18 @@ describe('absolute timers', () => {
       canStartSet: false,
     });
     expect(restRemainingSeconds('2026-07-10T12:08:30.000Z', '2026-07-10T12:08:00.250Z')).toBe(30);
+  });
+});
+
+describe('exercise sequencing', () => {
+  it('alternates circuit exercises before resting, while single lifts rest between sets', () => {
+    const circuit = exerciseSequence({ flow: 'circuit', targetRounds: 2, exercises: [{ exerciseId: 'a' }, { exerciseId: 'b' }, { exerciseId: 'c' }] } as WorkoutSegment);
+    expect(circuit).toEqual([0, 1, 2, 0, 1, 2]);
+    expect(circuit.map((_, step) => restAfterExerciseStep(circuit, step))).toEqual([false, false, true, false, false, true]);
+
+    const single = exerciseSequence({ flow: 'single', exercises: [{ exerciseId: 'a', targetSets: 3 }] } as WorkoutSegment);
+    expect(single).toEqual([0, 0, 0]);
+    expect(single.map((_, step) => restAfterExerciseStep(single, step))).toEqual([true, true, true]);
   });
 });
 

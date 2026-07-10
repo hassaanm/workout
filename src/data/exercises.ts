@@ -24,7 +24,7 @@ type ExerciseInput = {
 };
 
 const search = (source: string, name: string) =>
-  `https://www.youtube.com/results?search_query=${encodeURIComponent(`${source} ${name} exercise technique`)}`;
+  `${source} ${name} exercise technique`;
 
 const makeExercise = ({
   equipment = [], setup = [], mistakes = [], regressions = [], progressions = [],

@@ -265,6 +265,18 @@ export function restRemainingSeconds(restUntil: string | number | Date | undefin
   return restUntil == null ? 0 : Math.max(0, Math.ceil((timestamp(restUntil) - timestamp(now)) / 1000));
 }
 
+export function exerciseSequence(segment: WorkoutSegment): number[] {
+  const rounds = segment.targetRounds ?? Math.max(1, ...segment.exercises.map((exercise) => exercise.targetSets ?? 1));
+  if (segment.flow === 'single' || segment.flow === 'intervals') {
+    return Array.from({ length: segment.exercises[0]?.targetSets ?? rounds }, () => 0);
+  }
+  return Array.from({ length: rounds }, (_, round) => segment.exercises.flatMap((exercise, index) => round < (exercise.targetSets ?? rounds) ? [index] : [])).flat();
+}
+
+export function restAfterExerciseStep(sequence: number[], step: number) {
+  return step >= sequence.length - 1 || sequence[step + 1] <= sequence[step];
+}
+
 export function summarizeWarmup(plannedSeconds: number, elapsedSeconds: number): WarmupLog {
   if (!plannedSeconds) return { plannedSeconds: 0, completedSeconds: 0, status: 'not_applicable' };
   const completedSeconds = elapsedSeconds >= WARMUP_CREDIT_THRESHOLD_SECONDS
