@@ -1,5 +1,6 @@
 import { blocks, orientationWorkoutIds, weekdayWorkoutIds, workouts } from './data/program';
 import type {
+  ActiveSession,
   ClearanceKey,
   ClearanceRecord,
   DailyMetric,
@@ -8,12 +9,14 @@ import type {
   SetLog,
   SymptomCheck,
   SymptomSignal,
+  WarmupLog,
   WorkoutSegment,
 } from './types';
 
 const DAY_MS = 86_400_000;
 export const PROGRAM_DAYS = 13 * 28;
 export const MAIN_DURATION_SECONDS = 1200;
+export const WARMUP_CREDIT_THRESHOLD_SECONDS = 30;
 
 function dateParts(date: string) {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
@@ -260,4 +263,35 @@ export function timerState(
 
 export function restRemainingSeconds(restUntil: string | number | Date | undefined, now: string | number | Date) {
   return restUntil == null ? 0 : Math.max(0, Math.ceil((timestamp(restUntil) - timestamp(now)) / 1000));
+}
+
+export function summarizeWarmup(plannedSeconds: number, elapsedSeconds: number): WarmupLog {
+  if (!plannedSeconds) return { plannedSeconds: 0, completedSeconds: 0, status: 'not_applicable' };
+  const completedSeconds = elapsedSeconds >= WARMUP_CREDIT_THRESHOLD_SECONDS
+    ? Math.min(plannedSeconds, Math.max(0, Math.floor(elapsedSeconds)))
+    : 0;
+  return {
+    plannedSeconds,
+    completedSeconds,
+    status: completedSeconds === 0 ? 'skipped' : completedSeconds >= plannedSeconds ? 'complete' : 'partial',
+  };
+}
+
+export function pauseActiveSession(session: ActiveSession, now: string | number | Date = new Date()): ActiveSession {
+  if (session.pausedAt) return session;
+  return { ...session, pausedAt: new Date(timestamp(now)).toISOString() };
+}
+
+export function resumeActiveSession(session: ActiveSession, now: string | number | Date = new Date()): ActiveSession {
+  if (!session.pausedAt) return session;
+  const pausedForMs = Math.max(0, timestamp(now) - timestamp(session.pausedAt));
+  const shift = (value: string | undefined) => value ? new Date(timestamp(value) + pausedForMs).toISOString() : undefined;
+  return {
+    ...session,
+    pausedAt: undefined,
+    phaseStartedAt: shift(session.phaseStartedAt)!,
+    warmupStartedAt: shift(session.warmupStartedAt),
+    mainStartedAt: shift(session.mainStartedAt),
+    restUntil: shift(session.restUntil),
+  };
 }

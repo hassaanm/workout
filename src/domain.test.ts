@@ -5,13 +5,16 @@ import {
   classifySymptoms,
   differenceInCalendarDays,
   pickupMondayAdjustment,
+  pauseActiveSession,
   resolvePlannedDay,
   restRemainingSeconds,
+  resumeActiveSession,
   rollingBodyWeightAverage,
   suggestDoubleProgression,
+  summarizeWarmup,
   timerState,
 } from './domain';
-import type { ClearanceRecord, SessionLog, SymptomCheck } from './types';
+import type { ActiveSession, ClearanceRecord, SessionLog, SymptomCheck } from './types';
 
 const greenCheck: SymptomCheck = {
   kneePain0to10: 0,
@@ -136,5 +139,39 @@ describe('absolute timers', () => {
       canStartSet: false,
     });
     expect(restRemainingSeconds('2026-07-10T12:08:30.000Z', '2026-07-10T12:08:00.250Z')).toBe(30);
+  });
+});
+
+describe('warm-up and draft recovery', () => {
+  it('credits only meaningful warm-up time', () => {
+    expect(summarizeWarmup(300, 29)).toMatchObject({ completedSeconds: 0, status: 'skipped' });
+    expect(summarizeWarmup(300, 30)).toMatchObject({ completedSeconds: 30, status: 'partial' });
+    expect(summarizeWarmup(300, 400)).toMatchObject({ completedSeconds: 300, status: 'complete' });
+    expect(summarizeWarmup(0, 30)).toMatchObject({ status: 'not_applicable' });
+  });
+
+  it('freezes phase, main, and rest clocks while a draft is paused', () => {
+    const active = {
+      id: 'draft',
+      date: '2026-07-10',
+      plannedWorkoutId: 'upper_strength_a',
+      actualWorkoutId: 'upper_strength_a',
+      practice: false,
+      phase: 'main',
+      phaseStartedAt: '2026-07-10T12:00:00.000Z',
+      mainStartedAt: '2026-07-10T12:00:00.000Z',
+      restUntil: '2026-07-10T12:05:00.000Z',
+      currentSegmentIndex: 0,
+      currentExerciseIndex: 0,
+      sets: [],
+      preCheck: greenCheck,
+    } as ActiveSession;
+    const paused = pauseActiveSession(active, '2026-07-10T12:02:00.000Z');
+    const resumed = resumeActiveSession(paused, '2026-07-10T12:12:00.000Z');
+
+    expect(resumed.pausedAt).toBeUndefined();
+    expect(resumed.mainStartedAt).toBe('2026-07-10T12:10:00.000Z');
+    expect(resumed.restUntil).toBe('2026-07-10T12:15:00.000Z');
+    expect(timerState(resumed.mainStartedAt!, '2026-07-10T12:12:00.000Z', { startSecond: 0, endSecond: 480 }).overallElapsedSeconds).toBe(120);
   });
 });

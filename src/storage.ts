@@ -286,6 +286,7 @@ function validateSession(value: unknown, path: string): asserts value is Session
   if (item.nextMorningSignal !== undefined) oneOf(item.nextMorningSignal, ['green', 'yellow', 'red'], `${path}.nextMorningSignal`);
   oneOf(item.sessionDifficulty, ['very_easy', 'easy', 'right', 'hard', 'too_hard'], `${path}.sessionDifficulty`);
   if (item.jumpQualityStayedCrisp !== undefined) boolean(item.jumpQualityStayedCrisp, `${path}.jumpQualityStayedCrisp`);
+  if (item.warmup !== undefined) validateWarmup(item.warmup, `${path}.warmup`);
   optionalString(item.notes, `${path}.notes`);
   timestamp(item.startedAt, `${path}.startedAt`);
   timestamp(item.completedAt, `${path}.completedAt`);
@@ -351,12 +352,22 @@ function validateActiveSession(value: unknown, path: string): asserts value is A
   boolean(item.practice, `${path}.practice`);
   oneOf(item.phase, ['warmup', 'main', 'cooldown', 'checkout'], `${path}.phase`);
   timestamp(item.phaseStartedAt, `${path}.phaseStartedAt`);
+  optionalTimestamp(item.warmupStartedAt, `${path}.warmupStartedAt`);
+  if (item.warmup !== undefined) validateWarmup(item.warmup, `${path}.warmup`);
   optionalTimestamp(item.mainStartedAt, `${path}.mainStartedAt`);
+  optionalTimestamp(item.pausedAt, `${path}.pausedAt`);
   number(item.currentSegmentIndex, `${path}.currentSegmentIndex`, 0, 1000);
   number(item.currentExerciseIndex, `${path}.currentExerciseIndex`, 0, 1000);
   optionalTimestamp(item.restUntil, `${path}.restUntil`);
   array(item.sets, `${path}.sets`).forEach((set, index) => validateSet(set, `${path}.sets[${index}]`));
   validateSymptoms(item.preCheck, `${path}.preCheck`);
+}
+
+function validateWarmup(value: unknown, path: string): void {
+  const item = record(value, path);
+  number(item.plannedSeconds, `${path}.plannedSeconds`, 0, 3600);
+  number(item.completedSeconds, `${path}.completedSeconds`, 0, 3600);
+  oneOf(item.status, ['not_applicable', 'skipped', 'partial', 'complete'], `${path}.status`);
 }
 
 function record(value: unknown, path: string): Record<string, unknown> {

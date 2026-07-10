@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { exercises } from './data/exercises';
 import { blocks, workouts } from './data/program';
 import {
   addCalendarDays,
   classifySymptoms,
+  pauseActiveSession,
   pickupMondayAdjustment,
   resolvePlannedDay,
   restRemainingSeconds,
+  resumeActiveSession,
+  summarizeWarmup,
   timerState,
   toLocalDate,
 } from './domain';
@@ -56,6 +60,10 @@ function formatDate(date: string, options: Intl.DateTimeFormatOptions = { weekda
   return new Intl.DateTimeFormat(undefined, options).format(new Date(year, month - 1, day));
 }
 
+function plannedWarmupSeconds(warmup: WorkoutTemplate['warmup']) {
+  return warmup === 'prep_5' ? 300 : warmup === 'compressed_3' ? 180 : 0;
+}
+
 function latestSessionForExercise(data: AppDataV1, exerciseId: string, beforeDate?: string) {
   return [...data.sessions]
     .filter((session) => !beforeDate || session.date < beforeDate)
@@ -81,9 +89,11 @@ export default function App() {
   const [selectedDate, setSelectedDate] = useState(toLocalDate());
   const [checkinIntent, setCheckinIntent] = useState<CheckinIntent>(null);
   const [practiceSession, setPracticeSession] = useState<ActiveSession>();
+  const [playerOpen, setPlayerOpen] = useState(false);
   const [toast, setToast] = useState<string>();
   const [editingSession, setEditingSession] = useState<SessionLog>();
   const [checkpointOpen, setCheckpointOpen] = useState(false);
+  const [discardDraftOpen, setDiscardDraftOpen] = useState(false);
   const activeSession = practiceSession ?? data.activeSession;
 
   const commit = (next: AppDataV1 | ((current: AppDataV1) => AppDataV1)) => {
@@ -122,7 +132,7 @@ export default function App() {
     return <OnboardingScreen data={data} onComplete={commit} />;
   }
 
-  if (activeSession?.phase === 'checkout') {
+  if (activeSession?.phase === 'checkout' && playerOpen) {
     return (
       <CheckoutScreen
         active={activeSession}
@@ -142,6 +152,7 @@ export default function App() {
             }));
             setToast('Workout saved. Stopping on time counts.');
           }
+          setPlayerOpen(false);
           setView('today');
           setSelectedDate(toLocalDate());
         }}
@@ -149,13 +160,14 @@ export default function App() {
     );
   }
 
-  if (activeSession) {
+  if (activeSession && playerOpen) {
     return (
       <WorkoutPlayer
         active={activeSession}
         data={data}
         onChange={updateActive}
         onToast={setToast}
+        onLeave={() => setPlayerOpen(false)}
       />
     );
   }
@@ -170,6 +182,18 @@ export default function App() {
             selectedDate={selectedDate}
             onDate={setSelectedDate}
             onStart={() => setCheckinIntent({ practice: false })}
+            activeSession={data.activeSession}
+            onResumeDraft={() => {
+              if (!data.activeSession) return;
+              updateActive(resumeActiveSession(data.activeSession));
+              setPlayerOpen(true);
+            }}
+            onFinishDraft={() => {
+              if (!data.activeSession) return;
+              updateActive({ ...data.activeSession, phase: 'checkout', phaseStartedAt: new Date().toISOString(), pausedAt: undefined });
+              setPlayerOpen(true);
+            }}
+            onDiscardDraft={() => setDiscardDraftOpen(true)}
             onEditSession={setEditingSession}
             onCheckpoint={() => setCheckpointOpen(true)}
             onNextMorning={(session, signal) => commit((current) => ({ ...current, sessions: current.sessions.map((item) => item.id === session.id ? { ...item, nextMorningSignal: signal } : item) }))}
@@ -196,11 +220,13 @@ export default function App() {
             setCheckinIntent(null);
             if (active.practice) setPracticeSession(active);
             else commit((current) => ({ ...current, activeSession: active }));
+            setPlayerOpen(true);
           }}
         />
       )}
-      {editingSession && <EditSessionSheet session={editingSession} onClose={() => setEditingSession(undefined)} onSave={(updated) => { commit((current) => ({ ...current, sessions: current.sessions.map((item) => item.id === updated.id ? updated : item) })); setEditingSession(undefined); setToast('Log updated.'); }} />}
+      {editingSession && <EditSessionSheet session={editingSession} onClose={() => setEditingSession(undefined)} onSave={(updated) => { commit((current) => ({ ...current, sessions: current.sessions.map((item) => item.id === updated.id ? updated : item) })); setEditingSession(undefined); setToast('Log updated.'); }} onDelete={() => { commit((current) => ({ ...current, sessions: current.sessions.filter((item) => item.id !== editingSession.id) })); setEditingSession(undefined); setToast('Workout log deleted.'); }} />}
       {checkpointOpen && <CheckpointSheet data={data} date={selectedDate} onClose={() => setCheckpointOpen(false)} onSave={(checkpoint) => { commit((current) => ({ ...current, checkpoints: [...current.checkpoints, checkpoint] })); setCheckpointOpen(false); setToast('Checkpoint recorded.'); }} />}
+      {discardDraftOpen && <DiscardDraftSheet onClose={() => setDiscardDraftOpen(false)} onDiscard={() => { updateActive(undefined); setDiscardDraftOpen(false); setToast('Unsaved workout discarded.'); }} />}
       {toast && <div className="toast" role="status">{toast}</div>}
     </>
   );
@@ -223,11 +249,15 @@ function Masthead({ data, onTheme }: { data: AppDataV1; onTheme: () => void }) {
   );
 }
 
-function TodayDashboard({ data, selectedDate, onDate, onStart, onEditSession, onCheckpoint, onNextMorning }: {
+function TodayDashboard({ data, selectedDate, onDate, onStart, activeSession, onResumeDraft, onFinishDraft, onDiscardDraft, onEditSession, onCheckpoint, onNextMorning }: {
   data: AppDataV1;
   selectedDate: string;
   onDate: (date: string) => void;
   onStart: () => void;
+  activeSession?: ActiveSession;
+  onResumeDraft: () => void;
+  onFinishDraft: () => void;
+  onDiscardDraft: () => void;
   onEditSession: (session: SessionLog) => void;
   onCheckpoint: () => void;
   onNextMorning: (session: SessionLog, signal: 'green' | 'yellow' | 'red') => void;
@@ -243,7 +273,7 @@ function TodayDashboard({ data, selectedDate, onDate, onStart, onEditSession, on
   const mondayAdjustment = pickupMondayAdjustment(selectedDate, data.sessions);
   const yesterday = data.sessions.find((item) => item.date === addCalendarDays(today, -1) && !item.nextMorningSignal);
   const checkpointDone = data.checkpoints.some((item) => item.block === day.block);
-  const canStart = selectedDate === today && !session && !day.isBeforeProgram && !day.isAfterProgram;
+  const canStart = selectedDate === today && !session && !activeSession && !day.isBeforeProgram && !day.isAfterProgram;
 
   return (
     <main>
@@ -269,6 +299,19 @@ function TodayDashboard({ data, selectedDate, onDate, onStart, onEditSession, on
       {day.isAfterProgram && <div className="notice blue"><strong>The year is complete.</strong> Review the work, keep what served you, and choose the next block with your clinician.</div>}
       {day.substitutionReason && <div className="notice amber"><strong>Calendar plan adjusted.</strong> {day.substitutionReason}. Today uses {workout.name} instead of {plannedWorkout.name}.</div>}
       {mondayAdjustment?.reductionPercent ? <div className="notice amber"><strong>Saturday load carried forward.</strong> Reduce today’s lower-body volume by {mondayAdjustment.reductionPercent}%.</div> : null}
+      {activeSession && (
+        <section className="draft-card" aria-label="Workout draft">
+          <div>
+            <div className="eyebrow">{activeSession.pausedAt ? 'Paused draft' : 'Workout still running'}</div>
+            <h2>{workoutFor(activeSession.actualWorkoutId).shortName}</h2>
+            <p>{activeSession.phase === 'checkout' ? 'Finish the optional check-out, save partial, or discard it.' : activeSession.pausedAt ? 'The timer is paused until you resume.' : 'The timer continued while the app was away.'}</p>
+          </div>
+          <div className="draft-actions">
+            <button className="primary-button" onClick={activeSession.phase === 'checkout' ? onFinishDraft : onResumeDraft}>{activeSession.phase === 'checkout' ? 'Finish check-out' : 'Resume'}</button>
+            <button className="ghost-button" onClick={onDiscardDraft}>Discard</button>
+          </div>
+        </section>
+      )}
 
       <section className="hero-card top-space">
         <div className="eyebrow">{day.isFinalTest ? 'Final test day' : block.theme}</div>
@@ -280,7 +323,9 @@ function TodayDashboard({ data, selectedDate, onDate, onStart, onEditSession, on
           <div className="hero-stat"><strong>{workout.stressTags.includes('high-impact') ? 'High' : workout.stressTags.includes('low') ? 'Low' : 'Mod'}</strong><span>Stress</span></div>
         </div>
         <div className="hero-action">
-          {session ? (
+          {activeSession ? (
+            <button className="primary-button" onClick={activeSession.phase === 'checkout' ? onFinishDraft : onResumeDraft}>Resume workout draft</button>
+          ) : session ? (
             <button className="primary-button" onClick={() => onEditSession(session)}><Icon name="check" /> {session.completion === 'complete' ? 'Workout complete' : `Logged ${session.completion}`}</button>
           ) : selectedDate < today ? (
             <button className="primary-button" disabled>Missed · resume with today</button>
@@ -420,15 +465,21 @@ function CheckinScreen({ data, date, practice, onClose, onBegin }: {
         <h2 className="screen-title">Thirty seconds for a safer twenty.</h2>
         <p className="screen-intro">This does not diagnose anything. It chooses the conservative version when your symptoms or clearance call for it.</p>
 
-        <PainQuestion title="Knee pain right now" value={check.kneePain0to10} onChange={(value) => set('kneePain0to10', value)} />
-        <PainQuestion title="Back pain right now" value={check.backPain0to10} onChange={(value) => set('backPain0to10', value)} />
-
-        <ChoiceQuestion title="New swelling?" value={check.swelling ? 'yes' : 'no'} options={['no', 'yes']} onChange={(value) => set('swelling', value === 'yes')} />
-        <ChoiceQuestion title="Instability, giving way, or locking?" value={check.instability ? 'yes' : 'no'} options={['no', 'yes']} onChange={(value) => set('instability', value === 'yes')} />
-        <ChoiceQuestion title="Achilles or patellar tendon soreness" value={check.tendonSoreness} options={['none', 'mild', 'significant']} onChange={(value) => set('tendonSoreness', value as SymptomCheck['tendonSoreness'])} />
-        <ChoiceQuestion title="Sleep and readiness" value={check.readiness} options={['good', 'okay', 'poor']} onChange={(value) => set('readiness', value as SymptomCheck['readiness'])} />
-        {braceRequired && <ChoiceQuestion title="Prescribed brace in place?" value={check.braceUsed} options={['yes', 'no']} onChange={(value) => set('braceUsed', value as SymptomCheck['braceUsed'])} />}
-        <ChoiceQuestion title="New radiating pain, numbness, or weakness?" value={check.neurologicalSymptoms ? 'yes' : 'no'} options={['no', 'yes']} onChange={(value) => set('neurologicalSymptoms', value === 'yes')} />
+        <section className="checkin-group">
+          <div className="section-heading"><h2>Current symptoms</h2><span className="mini-label">Detailed check-in</span></div>
+          <div className="checkin-pain-pair">
+            <PainQuestion title="Knee pain right now" value={check.kneePain0to10} onChange={(value) => set('kneePain0to10', value)} />
+            <PainQuestion title="Back pain right now" value={check.backPain0to10} onChange={(value) => set('backPain0to10', value)} />
+          </div>
+          <div className="checkin-context-grid">
+            <ChoiceQuestion compact title="New swelling?" value={check.swelling ? 'yes' : 'no'} options={['no', 'yes']} onChange={(value) => set('swelling', value === 'yes')} />
+            <ChoiceQuestion compact title="Instability, giving way, or locking?" value={check.instability ? 'yes' : 'no'} options={['no', 'yes']} onChange={(value) => set('instability', value === 'yes')} />
+            <ChoiceQuestion compact title="Achilles or patellar tendon soreness" value={check.tendonSoreness} options={['none', 'mild', 'significant']} onChange={(value) => set('tendonSoreness', value as SymptomCheck['tendonSoreness'])} />
+            <ChoiceQuestion compact title="Sleep and readiness" value={check.readiness} options={['good', 'okay', 'poor']} onChange={(value) => set('readiness', value as SymptomCheck['readiness'])} />
+            {braceRequired && <ChoiceQuestion compact title="Prescribed brace in place?" value={check.braceUsed} options={['yes', 'no']} onChange={(value) => set('braceUsed', value as SymptomCheck['braceUsed'])} />}
+            <ChoiceQuestion compact title="New radiating pain, numbness, or weakness?" value={check.neurologicalSymptoms ? 'yes' : 'no'} options={['no', 'yes']} onChange={(value) => set('neurologicalSymptoms', value === 'yes')} />
+          </div>
+        </section>
 
         {data.profile.bodyWeightPrompt && (
           <div className="field question">
@@ -449,6 +500,7 @@ function CheckinScreen({ data, date, practice, onClose, onBegin }: {
             onClick={() => {
               const now = new Date().toISOString();
               const phase = actualWorkout.warmup === 'none' ? 'main' : 'warmup';
+              const plannedSeconds = plannedWarmupSeconds(actualWorkout.warmup);
               onBegin({
                 id: id(practice ? 'practice' : 'session'),
                 date,
@@ -457,6 +509,8 @@ function CheckinScreen({ data, date, practice, onClose, onBegin }: {
                 practice,
                 phase,
                 phaseStartedAt: now,
+                warmupStartedAt: phase === 'warmup' ? now : undefined,
+                warmup: summarizeWarmup(plannedSeconds, 0),
                 mainStartedAt: phase === 'main' ? now : undefined,
                 currentSegmentIndex: 0,
                 currentExerciseIndex: 0,
@@ -478,16 +532,14 @@ function PainQuestion({ title, value, onChange }: { title: string; value: number
   return (
     <div className="question">
       <h2>{title}</h2><p>0 is none. 3 is the yellow threshold; 4+ stops this workout.</p>
-      <div className="pain-grid">
-        {Array.from({ length: 11 }, (_, index) => <button key={index} className={`choice-button ${value === index ? 'selected' : ''}`} aria-pressed={value === index} onClick={() => onChange(index)}>{index}</button>)}
-      </div>
+      <div className="pain-slider"><input aria-label={title} type="range" min="0" max="10" value={value} onChange={(event) => onChange(Number(event.target.value))} /><output>{value}</output></div>
     </div>
   );
 }
 
-function ChoiceQuestion({ title, value, options, onChange }: { title: string; value: string; options: string[]; onChange: (value: string) => void }) {
+function ChoiceQuestion({ title, value, options, onChange, compact = false }: { title: string; value: string; options: string[]; onChange: (value: string) => void; compact?: boolean }) {
   return (
-    <div className="question">
+    <div className={`question ${compact ? 'question-compact' : ''}`}>
       <h2>{title}</h2>
       <div className="choice-row">
         {options.map((option) => <button key={option} className={`choice-button ${value === option ? 'selected' : ''}`} aria-pressed={value === option} onClick={() => onChange(option)}>{option.replaceAll('_', ' ')}</button>)}
@@ -511,19 +563,30 @@ const PREP_ITEMS = {
   ],
 } as const;
 
-function WorkoutPlayer({ active, data, onChange, onToast }: {
+function WorkoutPlayer({ active, data, onChange, onToast, onLeave }: {
   active: ActiveSession;
   data: AppDataV1;
   onChange: (active: ActiveSession | undefined) => void;
   onToast: (message: string) => void;
+  onLeave: () => void;
 }) {
   const [now, setNow] = useState(Date.now());
   const [logExercise, setLogExercise] = useState<{ planned: ExerciseDefinition; actual: ExerciseDefinition; segment: WorkoutSegment }>();
   const [detailExercise, setDetailExercise] = useState<ExerciseDefinition>();
   const [swapFor, setSwapFor] = useState<{ exercise: ExerciseDefinition; segment: WorkoutSegment }>();
   const [symptomOpen, setSymptomOpen] = useState(false);
+  const [exitOpen, setExitOpen] = useState(false);
   const previousRest = useRef(0);
   const workout = workoutFor(active.actualWorkoutId);
+  const exitSheet = exitOpen && (
+    <ExitWorkoutSheet
+      active={active}
+      onClose={() => setExitOpen(false)}
+      onPause={() => { onChange(pauseActiveSession(active)); onLeave(); }}
+      onSavePartial={() => { setExitOpen(false); onChange({ ...active, phase: 'checkout', phaseStartedAt: new Date().toISOString(), pausedAt: undefined }); }}
+      onDiscard={() => { onChange(undefined); onLeave(); onToast(active.practice ? 'Practice closed.' : 'Unsaved workout discarded.'); }}
+    />
+  );
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 250);
@@ -564,7 +627,7 @@ function WorkoutPlayer({ active, data, onChange, onToast }: {
     const itemIndex = Math.min(items.length - 1, Math.floor(phaseElapsed / 60));
     const [title, instruction] = items[itemIndex];
     return (
-      <PlayerFrame active={active} eyebrow={`${active.practice ? 'Practice · ' : ''}${warmup === 'prep_5' ? 'Mandatory prep' : 'Ramp-up'}`} onStop={() => confirm('Stop this workout and go to checkout?') && onChange({ ...active, phase: 'checkout', phaseStartedAt: new Date().toISOString() })}>
+      <PlayerFrame active={active} eyebrow={`${active.practice ? 'Practice · ' : ''}${warmup === 'prep_5' ? 'Mandatory prep' : 'Ramp-up'}`} onExit={() => setExitOpen(true)} exitSheet={exitSheet}>
         <div className="progress-track"><span style={{ width: `${Math.min(100, phaseElapsed / total * 100)}%` }} /></div>
         <div className="player-segment">Step {itemIndex + 1} of {items.length}</div>
         <h1 className="player-exercise">{title}</h1>
@@ -573,8 +636,7 @@ function WorkoutPlayer({ active, data, onChange, onToast }: {
         <div className="cue-card"><div className="label">Prep rule</div><p>{warmup === 'prep_5' ? 'Complete all five categories before impact or heavy lower-body work.' : 'Warm enough to move well; do not create fatigue.'}</p></div>
         <div className="player-spacer" />
         <div className="player-actions">
-          <button className="primary-button" disabled={!active.practice && phaseElapsed < total} onClick={() => { const started = new Date().toISOString(); onChange({ ...active, phase: 'main', phaseStartedAt: started, mainStartedAt: started, currentSegmentIndex: 0, currentExerciseIndex: 0 }); }}><Icon name="play" /> Begin 20:00 main</button>
-          {active.practice && phaseElapsed < total && <button className="secondary-button" onClick={() => { const started = new Date().toISOString(); onChange({ ...active, phase: 'main', phaseStartedAt: started, mainStartedAt: started }); }}>Skip in practice</button>}
+          <button className="primary-button" onClick={() => { const started = new Date().toISOString(); const elapsed = active.warmupStartedAt ? Math.max(0, Math.floor((Date.parse(started) - Date.parse(active.warmupStartedAt)) / 1000)) : phaseElapsed; onChange({ ...active, phase: 'main', phaseStartedAt: started, mainStartedAt: started, currentSegmentIndex: 0, currentExerciseIndex: 0, warmup: summarizeWarmup(total, elapsed) }); }}><Icon name="play" /> Start 20:00 main</button>
         </div>
       </PlayerFrame>
     );
@@ -584,7 +646,7 @@ function WorkoutPlayer({ active, data, onChange, onToast }: {
     const item = Math.min(2, Math.floor(phaseElapsed / 60));
     const items = [['Easy movement', 'Walk or pedal gently until breathing settles.'], ['Downshift breathing', 'Easy nasal inhale; longer relaxed exhale.'], ['Mobility or quick log', 'One comfortable drill, then check out.']];
     return (
-      <PlayerFrame active={active} eyebrow="Optional cooldown" onStop={() => onChange({ ...active, phase: 'checkout', phaseStartedAt: new Date().toISOString() })}>
+      <PlayerFrame active={active} eyebrow="Optional cooldown" onExit={() => setExitOpen(true)} exitSheet={exitSheet}>
         <div className="progress-track"><span style={{ width: `${Math.min(100, phaseElapsed / 180 * 100)}%` }} /></div>
         <div className="player-segment">Minute {item + 1} of 3</div>
         <h1 className="player-exercise">{items[item][0]}</h1>
@@ -608,7 +670,7 @@ function WorkoutPlayer({ active, data, onChange, onToast }: {
 
   if (restRemaining > 0 || qualityStopped) {
     return (
-      <PlayerFrame active={active} eyebrow={qualityStopped ? 'Quality preserved' : 'Rest · clock keeps moving'} onStop={() => confirm('Stop this workout and go to checkout?') && onChange({ ...active, phase: 'checkout', phaseStartedAt: new Date().toISOString() })}>
+      <PlayerFrame active={active} eyebrow={qualityStopped ? 'Quality preserved' : 'Rest · clock keeps moving'} onExit={() => setExitOpen(true)} exitSheet={exitSheet}>
         <div className="progress-track"><span style={{ width: `${Math.min(100, mainElapsed / 1200 * 100)}%` }} /></div>
         <div className="rest-state">
           <div className="player-segment">{segment.label}</div>
@@ -624,8 +686,9 @@ function WorkoutPlayer({ active, data, onChange, onToast }: {
   }
 
   return (
-    <PlayerFrame active={active} eyebrow={`${active.practice ? 'Practice · ' : ''}${formatClock(segmentState?.overallRemainingSeconds ?? 1200)} main`} onStop={() => confirm('Stop this workout and go to checkout?') && onChange({ ...active, phase: 'checkout', phaseStartedAt: new Date().toISOString() })}>
+    <PlayerFrame active={active} eyebrow={`${active.practice ? 'Practice · ' : ''}${formatClock(segmentState?.overallRemainingSeconds ?? 1200)} main`} onExit={() => setExitOpen(true)} exitSheet={exitSheet}>
       <div className="progress-track"><span style={{ width: `${Math.min(100, mainElapsed / 1200 * 100)}%` }} /></div>
+      {active.warmup && active.warmup.status !== 'not_applicable' && <div className={`player-prep ${active.warmup.status}`}><strong>Prep {active.warmup.status}</strong><span>{active.warmup.completedSeconds ? `${formatClock(active.warmup.completedSeconds)} logged` : 'No credited warm-up'}</span></div>}
       <div className="player-segment">{segment.label} · {segment.mode === 'quality_limited' ? 'Quality limited' : `Segment ${currentSegmentIndex + 1}/${workout.segments.length}`}</div>
       <h1 className="player-exercise">{actualExercise.name}</h1>
       <p className="player-target">{target} · {segment.notes[0] ?? 'Stop with clean form.'}</p>
@@ -657,12 +720,13 @@ function WorkoutPlayer({ active, data, onChange, onToast }: {
   );
 }
 
-function PlayerFrame({ active, eyebrow, onStop, children }: { active: ActiveSession; eyebrow: string; onStop: () => void; children: React.ReactNode }) {
+function PlayerFrame({ active, eyebrow, onExit, exitSheet, children }: { active: ActiveSession; eyebrow: string; onExit: () => void; exitSheet?: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className="screen-overlay workout-player">
-      <main className="player-content">
-        <div className="player-top"><div className="eyebrow">{eyebrow}</div><button className="icon-button" aria-label="Stop workout" onClick={onStop}><Icon name="close" /></button></div>
+      <main className={`player-content ${exitSheet ? 'is-obscured' : ''}`} aria-hidden={exitSheet ? true : undefined}>
+        <div className="player-top"><div className="eyebrow">{eyebrow}</div><button className="icon-button" aria-label="Exit workout" onClick={onExit}><Icon name="close" /></button></div>
         {children}
+        {exitSheet}
       </main>
     </div>
   );
@@ -803,15 +867,65 @@ function SymptomSheet({ onClose, onRegress, onStop }: { onClose: () => void; onR
   );
 }
 
-function Sheet({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
+function ExitWorkoutSheet({ active, onClose, onPause, onSavePartial, onDiscard }: {
+  active: ActiveSession;
+  onClose: () => void;
+  onPause: () => void;
+  onSavePartial: () => void;
+  onDiscard: () => void;
+}) {
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  if (active.practice) {
+    return (
+      <Sheet onClose={onClose}>
+        <div className="eyebrow">Practice mode</div>
+        <h2>Leave practice?</h2>
+        <p className="sheet-copy">Practice never writes workout data.</p>
+        <div className="sheet-actions"><button className="secondary-button" onClick={onClose}>Continue</button><button className="primary-button" onClick={onDiscard}>Exit practice</button></div>
+      </Sheet>
+    );
+  }
+
   return (
+    <Sheet onClose={onClose}>
+      {confirmDiscard ? <>
+        <div className="eyebrow red-text">Discard workout</div>
+        <h2>Discard this draft?</h2>
+        <p className="sheet-copy">{active.sets.length ? `${active.sets.length} logged ${active.sets.length === 1 ? 'set' : 'sets'} will be removed.` : 'No workout will be saved.'} This cannot be undone.</p>
+        <div className="sheet-actions"><button className="secondary-button" onClick={() => setConfirmDiscard(false)}>Keep workout</button><button className="danger-button" onClick={onDiscard}>Discard</button></div>
+      </> : <>
+        <div className="eyebrow">Workout controls</div>
+        <h2>Leave the player?</h2>
+        <p className="sheet-copy">Choose exactly what should happen. Nothing is saved unless you say so.</p>
+        <button className="card wide top-space" onClick={onPause}><div className="row-title">Pause and return to Today</div><div className="row-copy">Keep this draft. The workout and rest clocks freeze until you resume.</div></button>
+        <button className="card wide" onClick={onSavePartial}><div className="row-title">Save as partial</div><div className="row-copy">Open check-out and choose what to record.</div></button>
+        <button className="card wide" onClick={() => setConfirmDiscard(true)}><div className="row-title red-text">Discard without saving</div><div className="row-copy">Remove this draft from the device. This cannot be undone.</div></button>
+        <div className="sheet-actions"><button className="secondary-button" onClick={onClose}>Keep working</button></div>
+      </>}
+    </Sheet>
+  );
+}
+
+function DiscardDraftSheet({ onClose, onDiscard }: { onClose: () => void; onDiscard: () => void }) {
+  return (
+    <Sheet onClose={onClose}>
+      <div className="eyebrow red-text">Discard workout</div>
+      <h2>Discard this draft?</h2>
+      <p className="sheet-copy">Nothing will be added to your history. This cannot be undone.</p>
+      <div className="sheet-actions"><button className="secondary-button" onClick={onClose}>Keep workout</button><button className="danger-button" onClick={onDiscard}>Discard</button></div>
+    </Sheet>
+  );
+}
+
+function Sheet({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
+  return createPortal(
     <div className="sheet-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="sheet" role="dialog" aria-modal="true">
         <div className="sheet-handle" />
         {children}
       </section>
     </div>
-  );
+  , document.body);
 }
 
 function CheckoutScreen({ active, data, onBack, onSave }: {
@@ -883,6 +997,7 @@ function CheckoutScreen({ active, data, onBack, onSave }: {
             postCheck: { ...check, signal },
             sessionDifficulty: difficulty,
             jumpQualityStayedCrisp: jumpDay ? jumpCrisp : undefined,
+            warmup: active.warmup,
             notes: notes || undefined,
             startedAt: active.mainStartedAt ?? active.phaseStartedAt,
             completedAt,
@@ -893,10 +1008,11 @@ function CheckoutScreen({ active, data, onBack, onSave }: {
   );
 }
 
-function EditSessionSheet({ session, onClose, onSave }: { session: SessionLog; onClose: () => void; onSave: (session: SessionLog) => void }) {
+function EditSessionSheet({ session, onClose, onSave, onDelete }: { session: SessionLog; onClose: () => void; onSave: (session: SessionLog) => void; onDelete: () => void }) {
   const [completion, setCompletion] = useState(session.completion);
   const [difficulty, setDifficulty] = useState(session.sessionDifficulty);
   const [notes, setNotes] = useState(session.notes ?? '');
+  const [confirmDelete, setConfirmDelete] = useState(false);
   return (
     <Sheet onClose={onClose}>
       <div className="eyebrow">{formatDate(session.date)} · edit log</div>
@@ -907,6 +1023,7 @@ function EditSessionSheet({ session, onClose, onSave }: { session: SessionLog; o
       <div className="section-heading top-space"><h2>Recorded sets</h2></div>
       {session.sets.map((set) => <div className="row" key={set.id}><div><div className="row-title">{exerciseFor(set.actualExerciseId).name}</div><div className="row-copy">Set {set.setIndex + 1}</div></div><div className="row-value">{set.loadLb ? `${set.loadLb} lb × ` : ''}{set.reps ?? `${set.durationSeconds ?? 0}s`}</div></div>)}
       <div className="sheet-actions"><button className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" onClick={() => onSave({ ...session, completion, sessionDifficulty: difficulty, notes: notes || undefined })}>Save changes</button></div>
+      {confirmDelete ? <div className="notice red top-space"><strong>Delete this workout log?</strong><p>Its sets will be removed. Any bodyweight entry stays.</p><div className="sheet-actions"><button className="secondary-button" onClick={() => setConfirmDelete(false)}>Keep log</button><button className="danger-button" onClick={onDelete}>Delete</button></div></div> : <button className="danger-button wide top-space" onClick={() => setConfirmDelete(true)}>Delete workout log</button>}
     </Sheet>
   );
 }

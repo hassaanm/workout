@@ -147,9 +147,16 @@ export interface SessionLog {
   nextMorningSignal?: SymptomSignal;
   sessionDifficulty: 'very_easy' | 'easy' | 'right' | 'hard' | 'too_hard';
   jumpQualityStayedCrisp?: boolean;
+  warmup?: WarmupLog;
   notes?: string;
   startedAt: string;
   completedAt: string;
+}
+
+export interface WarmupLog {
+  plannedSeconds: number;
+  completedSeconds: number;
+  status: 'not_applicable' | 'skipped' | 'partial' | 'complete';
 }
 
 export interface DailyMetric {
@@ -211,7 +218,10 @@ export interface ActiveSession {
   practice: boolean;
   phase: 'warmup' | 'main' | 'cooldown' | 'checkout';
   phaseStartedAt: string;
+  warmupStartedAt?: string;
+  warmup?: WarmupLog;
   mainStartedAt?: string;
+  pausedAt?: string;
   currentSegmentIndex: number;
   currentExerciseIndex: number;
   restUntil?: string;
