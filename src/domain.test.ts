@@ -5,7 +5,9 @@ import {
   classifySymptoms,
   differenceInCalendarDays,
   exerciseSequence,
+  hasEquipmentFor,
   pickupMondayAdjustment,
+  resolveEquipmentSwap,
   pauseActiveSession,
   resolvePlannedDay,
   restRemainingSeconds,
@@ -17,6 +19,7 @@ import {
   summarizeWarmup,
   timerState,
 } from './domain';
+import { exerciseById } from './data/exercises';
 import type { ActiveSession, ClearanceRecord, SessionLog, SymptomCheck, WorkoutSegment } from './types';
 
 const greenCheck: SymptomCheck = {
@@ -152,6 +155,31 @@ describe('absolute timers', () => {
       canStartSet: false,
     });
     expect(restRemainingSeconds('2026-07-10T12:08:30.000Z', '2026-07-10T12:08:00.250Z')).toBe(30);
+  });
+});
+
+describe('equipment resolution', () => {
+  const cleared = (keys: string[]): ClearanceRecord[] =>
+    keys.map((key, index) => ({ id: String(index), key: key as ClearanceRecord['key'], status: 'cleared', date: '2026-07-01', source: 'pt' }));
+  const scoopToss = { id: 'med_ball_scoop_toss', equipmentIds: [['medicine_ball']] };
+
+  it('requires one item from every equipment group', () => {
+    expect(hasEquipmentFor({ equipmentIds: [] }, [])).toBe(true);
+    expect(hasEquipmentFor({ equipmentIds: [['bench'], ['barbell', 'dumbbells']] }, ['bench', 'dumbbells'])).toBe(true);
+    expect(hasEquipmentFor({ equipmentIds: [['bench'], ['barbell', 'dumbbells']] }, ['barbell'])).toBe(false);
+  });
+
+  it('keeps the planned exercise when its equipment is owned', () => {
+    expect(resolveEquipmentSwap(exerciseById[scoopToss.id], ['medicine_ball'], [])).toBeUndefined();
+  });
+
+  it('substitutes missing-equipment exercises, respecting clearance', () => {
+    // No medicine ball, no kettlebell: falls through kettlebell_swing to the bodyweight option.
+    expect(resolveEquipmentSwap(exerciseById[scoopToss.id], [], [])?.id).toBe('shadow_power');
+    // Kettlebell owned but heavy_hamstring not cleared: swing is gated, still bodyweight.
+    expect(resolveEquipmentSwap(exerciseById[scoopToss.id], ['kettlebell'], [])?.id).toBe('shadow_power');
+    // Kettlebell owned and cleared: the same-stimulus swing wins.
+    expect(resolveEquipmentSwap(exerciseById[scoopToss.id], ['kettlebell'], cleared(['heavy_hamstring']))?.id).toBe('kettlebell_swing');
   });
 });
 

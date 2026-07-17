@@ -64,7 +64,7 @@ describe('workout storage', () => {
       customExercises: [{
         id: 'custom-1', name: 'Custom move', category: 'rehab', equipment: ['band'], purpose: 'Test', setup: ['Stand'], execution: ['Move'],
         primaryCues: ['Cue'], shouldFeel: ['Muscles'], shouldNotFeel: ['Pain'], commonMistakes: ['Rushing'], regressionIds: [], progressionIds: [],
-        bodyweightAlternativeIds: [], clearanceRequired: ['squat_loading'], defaultRepScheme: '8-12', defaultRestSeconds: 60, loadKind: 'total',
+        bodyweightAlternativeIds: [], alternativeIds: [], equipmentIds: [['resistance_bands']], clearanceRequired: ['squat_loading'], defaultRepScheme: '8-12', defaultRestSeconds: 60, loadKind: 'total',
         tracking: 'reps', demoSearchQuery: 'custom move', sourceName: 'PT', lastVerifiedDate: '2026-07-01',
       }],
       sessions: [{

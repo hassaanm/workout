@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { equipmentLabel } from './data/equipment';
 import { exercises } from './data/exercises';
 import { exercisePhotoIds } from './data/exercisePhotos';
 import { blocks, workouts } from './data/program';
@@ -11,6 +12,9 @@ import {
   pauseActiveSession,
   pickupMondayAdjustment,
   resolvePlannedDay,
+  clearanceSatisfied,
+  hasEquipmentFor,
+  resolveEquipmentSwap,
   restRemainingSeconds,
   restAfterExerciseStep,
   resumeActiveSession,
@@ -192,7 +196,7 @@ export default function App() {
             onDate={(date) => { setSelectedDate(date); setPreflightSwaps({}); }}
             onStart={() => setCheckinIntent({ practice: false })}
             preflightSwaps={preflightSwaps}
-            onPreviewExercise={(planned, swapKey) => setPreviewExercise({ planned, selected: exerciseFor(preflightSwaps[swapKey] ?? planned.id), swapKey })}
+            onPreviewExercise={(planned, swapKey, selected) => setPreviewExercise({ planned, selected, swapKey })}
             activeSession={data.activeSession}
             onResumeDraft={() => {
               if (!data.activeSession) return;
@@ -241,7 +245,7 @@ export default function App() {
       {checkpointOpen && <CheckpointSheet data={data} date={selectedDate} onClose={() => setCheckpointOpen(false)} onSave={(checkpoint) => { commit((current) => ({ ...current, checkpoints: [...current.checkpoints, checkpoint] })); setCheckpointOpen(false); setToast('Checkpoint recorded.'); }} />}
       {discardDraftOpen && <DiscardDraftSheet onClose={() => setDiscardDraftOpen(false)} onDiscard={() => { updateActive(undefined); setDiscardDraftOpen(false); setToast('Unsaved workout discarded.'); }} />}
       {previewExercise && <ExerciseDetailSheet exercise={previewExercise.selected} data={data} onClose={() => setPreviewExercise(undefined)} onSwap={() => { setPreflightSwapFor(previewExercise); setPreviewExercise(undefined); }} />}
-      {preflightSwapFor && <SwapSheet planned={preflightSwapFor.planned} selected={preflightSwapFor.selected} clearances={data.clearances} onClose={() => setPreflightSwapFor(undefined)} onSelect={(selected) => { setPreflightSwaps((current) => ({ ...current, [preflightSwapFor.swapKey]: selected.id })); setPreflightSwapFor(undefined); }} />}
+      {preflightSwapFor && <SwapSheet planned={preflightSwapFor.planned} selected={preflightSwapFor.selected} clearances={data.clearances} owned={data.profile.equipment} onClose={() => setPreflightSwapFor(undefined)} onSelect={(selected) => { setPreflightSwaps((current) => ({ ...current, [preflightSwapFor.swapKey]: selected.id })); setPreflightSwapFor(undefined); }} />}
       {toast && <div className="toast" role="status">{toast}</div>}
     </>
   );
@@ -270,7 +274,7 @@ function TodayDashboard({ data, selectedDate, onDate, onStart, preflightSwaps, o
   onDate: (date: string) => void;
   onStart: () => void;
   preflightSwaps: Record<string, string>;
-  onPreviewExercise: (planned: ExerciseDefinition, swapKey: string) => void;
+  onPreviewExercise: (planned: ExerciseDefinition, swapKey: string, selected: ExerciseDefinition) => void;
   activeSession?: ActiveSession;
   onResumeDraft: () => void;
   onFinishDraft: () => void;
@@ -387,10 +391,12 @@ function TodayDashboard({ data, selectedDate, onDate, onStart, preflightSwaps, o
                 <div className="preview-exercises">{segment.exercises.map((item) => {
                   const planned = exerciseFor(item.exerciseId);
                   const swapKey = `${segment.id}:${planned.id}`;
-                  const selected = exerciseFor(preflightSwaps[swapKey] ?? planned.id);
+                  const manual = preflightSwaps[swapKey];
+                  const auto = manual ? undefined : resolveEquipmentSwap(planned, data.profile.equipment, data.clearances, selectedDate);
+                  const selected = exerciseFor(manual ?? auto?.id ?? planned.id);
                   const dose = item.repsText ?? (item.repRange ? `${item.repRange[0]}–${item.repRange[1]}${item.perSide ? ' / side' : ''}` : item.durationSeconds ? `${item.durationSeconds} sec` : selected.defaultRepScheme ?? 'quality reps');
                   const sets = item.targetSets ?? segment.targetRounds;
-                  return <button className="preview-exercise" key={planned.id} onClick={() => onPreviewExercise(planned, swapKey)}><span><strong>{selected.name}</strong><small>{sets ? `${sets} ${segment.flow === 'single' ? 'sets' : 'rounds'} · ` : ''}{dose}</small></span>{selected.id !== planned.id && <em>swapped</em>}<Icon name="chevron-right" /></button>;
+                  return <button className="preview-exercise" key={planned.id} onClick={() => onPreviewExercise(planned, swapKey, selected)}><span><strong>{selected.name}</strong><small>{sets ? `${sets} ${segment.flow === 'single' ? 'sets' : 'rounds'} · ` : ''}{dose}</small></span>{selected.id !== planned.id && <em>{manual ? 'swapped' : 'no gear'}</em>}<Icon name="chevron-right" /></button>;
                 })}</div>
               </div>
               <span className="pill">{segment.mode === 'quality_limited' ? 'quality' : segment.flow}</span>
@@ -526,6 +532,16 @@ function CheckinScreen({ data, date, practice, exerciseSwaps, onClose, onBegin }
               const now = new Date().toISOString();
               const phase = actualWorkout.warmup === 'none' ? 'main' : 'warmup';
               const plannedSeconds = plannedWarmupSeconds(actualWorkout.warmup);
+              const mergedSwaps = { ...exerciseSwaps };
+              for (const segment of actualWorkout.segments) {
+                for (const segmentExercise of segment.exercises) {
+                  const planned = exerciseFor(segmentExercise.exerciseId);
+                  const key = `${segment.id}:${planned.id}`;
+                  if (mergedSwaps[key]) continue;
+                  const auto = resolveEquipmentSwap(planned, data.profile.equipment, data.clearances, date);
+                  if (auto) mergedSwaps[key] = auto.id;
+                }
+              }
               onBegin({
                 id: id(practice ? 'practice' : 'session'),
                 date,
@@ -539,7 +555,7 @@ function CheckinScreen({ data, date, practice, exerciseSwaps, onClose, onBegin }
                 mainStartedAt: phase === 'main' ? now : undefined,
                 currentSegmentIndex: 0,
                 currentExerciseIndex: 0,
-                exerciseSwaps: Object.keys(exerciseSwaps).length ? exerciseSwaps : undefined,
+                exerciseSwaps: Object.keys(mergedSwaps).length ? mergedSwaps : undefined,
                 bodyWeightLb: weight ? Number(weight) : undefined,
                 sets: [],
                 preCheck: { ...check, signal },
@@ -768,7 +784,7 @@ function WorkoutPlayer({ active, data, onChange, onToast, onLeave }: {
         }
         setLogExercise(undefined);
       }} />}
-      {swapFor && <SwapSheet planned={swapFor.planned} selected={swapFor.selected} clearances={data.clearances} onClose={() => setSwapFor(undefined)} onSelect={(selected) => { onChange({ ...active, exerciseSwaps: { ...(active.exerciseSwaps ?? {}), [swapKey]: selected.id } }); setSwapFor(undefined); }} />}
+      {swapFor && <SwapSheet planned={swapFor.planned} selected={swapFor.selected} clearances={data.clearances} owned={data.profile.equipment} onClose={() => setSwapFor(undefined)} onSelect={(selected) => { onChange({ ...active, exerciseSwaps: { ...(active.exerciseSwaps ?? {}), [swapKey]: selected.id } }); setSwapFor(undefined); }} />}
       {detailOpen && <ExerciseDetailSheet exercise={actualExercise} data={data} onClose={() => setDetailOpen(false)} onSwap={() => { setDetailOpen(false); setSwapFor({ planned: plannedExercise, selected: actualExercise }); }} />}
       {symptomOpen && <SymptomSheet onClose={() => setSymptomOpen(false)} onRegress={() => { setSymptomOpen(false); setSwapFor({ planned: plannedExercise, selected: actualExercise }); }} onStop={() => { setSymptomOpen(false); onChange({ ...active, phase: 'checkout', phaseStartedAt: new Date().toISOString() }); }} />}
     </PlayerFrame>
@@ -906,20 +922,26 @@ function ExerciseDetailSheet({ exercise, data, onClose, onSwap }: { exercise: Ex
   );
 }
 
-function SwapSheet({ planned, selected, clearances, onClose, onSelect }: { planned: ExerciseDefinition; selected: ExerciseDefinition; clearances: ClearanceRecord[]; onClose: () => void; onSelect: (exercise: ExerciseDefinition) => void }) {
+function SwapSheet({ planned, selected, clearances, owned, onClose, onSelect }: { planned: ExerciseDefinition; selected: ExerciseDefinition; clearances: ClearanceRecord[]; owned: string[]; onClose: () => void; onSelect: (exercise: ExerciseDefinition) => void }) {
   const latest = latestClearances(clearances, toLocalDate());
-  const isCleared = (exercise: ExerciseDefinition) => exercise.clearanceRequired.every((key) => {
-    const status = latest.get(key)?.status;
-    return status === 'cleared' || status === 'cleared_with_limits';
-  });
+  const plannedAvailable = hasEquipmentFor(planned, owned);
+  const missingLabels = planned.equipmentIds
+    .filter((group) => !group.some((id) => owned.includes(id)))
+    .map((group) => group.map(equipmentLabel).join(' / '));
   const alternatives = [
-    { id: planned.id, label: 'Original plan' },
+    { id: planned.id, label: plannedAvailable ? 'Original plan' : `Original plan · needs ${missingLabels.join(', ')} (not in your equipment)` },
+    ...planned.alternativeIds.map((id) => ({ id, label: 'Alternative' })),
     ...planned.bodyweightAlternativeIds.map((id) => ({ id, label: 'No equipment' })),
     ...planned.regressionIds.map((id) => ({ id, label: 'Regression' })),
     ...planned.progressionIds.map((id) => ({ id, label: 'Progression' })),
   ]
     .reduce<{ id: string; label: string }[]>((items, option) => items.some((item) => item.id === option.id) ? items : [...items, option], [])
-    .filter((option) => option.label !== 'Progression' || isCleared(exerciseFor(option.id)));
+    .filter((option) => {
+      if (option.id === planned.id || option.id === selected.id) return true;
+      const item = exerciseFor(option.id);
+      return hasEquipmentFor(item, owned) && clearanceSatisfied(item, latest);
+    })
+    .slice(0, 5);
   return (
     <Sheet onClose={onClose}>
       <div className="eyebrow">Swap for today</div>
@@ -929,10 +951,11 @@ function SwapSheet({ planned, selected, clearances, onClose, onSelect }: { plann
         {alternatives.map((option) => {
           const item = exerciseFor(option.id);
           const equipment = item.equipment.length ? item.equipment.join(' · ') : 'No equipment';
+          const meta = option.id === planned.id && !plannedAvailable ? option.label : option.label === equipment ? option.label : `${option.label} · ${equipment}`;
           return <button className={`swap-option ${selected.id === item.id ? 'selected-swap' : ''}`} key={item.id} onClick={() => onSelect(item)}>
             <span className="swap-option-name">{item.name}</span>
             {selected.id === item.id && <span className="swap-current">Current</span>}
-            <span className="swap-option-meta">{option.label === equipment ? option.label : `${option.label} · ${equipment}`}</span>
+            <span className="swap-option-meta">{meta}</span>
           </button>
         })}
       </div>

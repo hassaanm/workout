@@ -1,3 +1,4 @@
+import { EQUIPMENT_IDS } from './data/equipment';
 import { toLocalDate } from './domain';
 import type {
   ActiveSession,
@@ -30,22 +31,8 @@ const CLEARANCE_KEYS: ClearanceKey[] = [
   'pickup_contact',
 ];
 
-const DEFAULT_EQUIPMENT = [
-  'barbell',
-  'plates',
-  'squat_rack',
-  'trap_bar',
-  'dumbbells',
-  'kettlebell',
-  'bench',
-  'pull_up_bar',
-  'dip_station',
-  'resistance_bands',
-  'slant_board',
-  'bosu',
-  'basketball_court',
-  'adjustable_rim',
-];
+// Fresh installs assume full equipment; onboarding lets the user deselect.
+const DEFAULT_EQUIPMENT = [...EQUIPMENT_IDS];
 
 export function defaultData(): AppDataV1 {
   const today = toLocalDate();
@@ -262,6 +249,15 @@ function validateExercise(value: unknown, path: string): asserts value is Exerci
     'progressionIds',
     'bodyweightAlternativeIds',
   ] as const) stringArray(item[key], `${path}.${key}`);
+  // Newer fields; tolerate their absence in backups exported before they existed.
+  if (item.alternativeIds !== undefined) stringArray(item.alternativeIds, `${path}.alternativeIds`);
+  if (item.equipmentIds !== undefined) {
+    array(item.equipmentIds, `${path}.equipmentIds`).forEach((group, index) => {
+      array(group, `${path}.equipmentIds[${index}]`).forEach((entry, entryIndex) =>
+        oneOf(entry, EQUIPMENT_IDS, `${path}.equipmentIds[${index}][${entryIndex}]`),
+      );
+    });
+  }
   array(item.clearanceRequired, `${path}.clearanceRequired`).forEach((entry, index) =>
     oneOf(entry, CLEARANCE_KEYS, `${path}.clearanceRequired[${index}]`),
   );

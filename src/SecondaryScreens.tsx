@@ -19,24 +19,7 @@ import type {
   SessionLog,
 } from './types';
 
-const EQUIPMENT = [
-  ['barbell', 'Barbell'],
-  ['plates', 'Plates'],
-  ['squat_rack', 'Squat rack'],
-  ['trap_bar', 'Trap bar'],
-  ['dumbbells', 'Dumbbells'],
-  ['kettlebell', 'Kettlebell'],
-  ['bench', 'Bench'],
-  ['pull_up_bar', 'Pull-up bar'],
-  ['dip_station', 'Dip setup'],
-  ['resistance_bands', 'Bands'],
-  ['slant_board', 'Slant board'],
-  ['bosu', 'BOSU'],
-  ['basketball_court', 'Court'],
-  ['adjustable_rim', 'Adjustable rim'],
-  ['exercise_bike', 'Exercise bike'],
-  ['medicine_ball', 'Medicine ball'],
-] as const;
+import { EQUIPMENT } from './data/equipment';
 
 const CLEARANCES: [ClearanceKey, string][] = [
   ['brace_required', 'Brace requirement'],

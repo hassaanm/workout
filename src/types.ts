@@ -31,6 +31,8 @@ export interface ExerciseDefinition {
   name: string;
   category: string;
   equipment: string[];
+  /** Owned-equipment requirements: outer array = AND, inner = OR of equipment ids. Household items are not encoded. */
+  equipmentIds: string[][];
   purpose: string;
   setup: string[];
   execution: string[];
@@ -41,6 +43,8 @@ export interface ExerciseDefinition {
   regressionIds: string[];
   progressionIds: string[];
   bodyweightAlternativeIds: string[];
+  /** Same-difficulty, same-pattern variants using different equipment. */
+  alternativeIds: string[];
   clearanceRequired: ClearanceKey[];
   defaultRepScheme?: string;
   defaultRestSeconds?: number;

@@ -1,9 +1,11 @@
+import { exerciseById } from './data/exercises';
 import { blocks, orientationWorkoutIds, weekdayWorkoutIds, workouts } from './data/program';
 import type {
   ActiveSession,
   ClearanceKey,
   ClearanceRecord,
   DailyMetric,
+  ExerciseDefinition,
   PlannedDay,
   SessionLog,
   SetLog,
@@ -120,6 +122,35 @@ export function applyClearanceSubstitution(
       ? `Not cleared: ${missing.map((key) => key.replaceAll('_', ' ')).join(', ')}`
       : undefined,
   };
+}
+
+export function hasEquipmentFor(exercise: Pick<ExerciseDefinition, 'equipmentIds'>, owned: string[]) {
+  return exercise.equipmentIds.every((group) => group.some((id) => owned.includes(id)));
+}
+
+export function clearanceSatisfied(
+  exercise: Pick<ExerciseDefinition, 'clearanceRequired'>,
+  latest: Map<ClearanceKey, ClearanceRecord>,
+) {
+  return exercise.clearanceRequired.every((key) => {
+    const status = latest.get(key)?.status;
+    return status === 'cleared' || status === 'cleared_with_limits';
+  });
+}
+
+export function resolveEquipmentSwap(
+  exercise: ExerciseDefinition,
+  owned: string[],
+  clearances: ClearanceRecord[],
+  onDate?: string,
+): ExerciseDefinition | undefined {
+  if (hasEquipmentFor(exercise, owned)) return undefined;
+  const latest = latestClearances(clearances, onDate);
+  for (const id of [...exercise.alternativeIds, ...exercise.bodyweightAlternativeIds, ...exercise.regressionIds]) {
+    const candidate = exerciseById[id];
+    if (candidate && hasEquipmentFor(candidate, owned) && clearanceSatisfied(candidate, latest)) return candidate;
+  }
+  return undefined;
 }
 
 export function resolvePlannedDay(
